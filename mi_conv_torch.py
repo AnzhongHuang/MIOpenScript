@@ -167,7 +167,51 @@ def main():
         grad_output_shape = (args.batchsize, args.out_channels, out_height, out_width)
     
     grad_output = create_tensor(grad_output_shape, args.dout_data)
+
+    trace_name = f"conv{type_str}-F{args.forw}-n{args.batchsize}-c{args.in_channels}"
+    # Generate equivalent MIOpenDriver command
+    cmd = f"MIOpenDriver conv{type_str} -F {args.forw} -n {args.batchsize} -c {args.in_channels} "
     
+    if is_3d:
+        cmd += f"-d {args.in_d} "
+    cmd += f"-H {args.in_h} -W {args.in_w} -k {args.out_channels} "
+    trace_name += f"-H{args.in_h}-W{args.in_w}-k{args.out_channels}"
+
+    if is_3d:
+        cmd += f"-@ {args.fil_d} "
+    cmd += f"-y {args.fil_h} -x {args.fil_w} "
+    trace_name += f"-y{args.fil_h}-x{args.fil_w}"
+
+    if is_3d:
+        cmd += f"-$ {args.pad_d} "
+    cmd += f"-p {args.pad_h} -q {args.pad_w} "
+    trace_name += f"-p{args.pad_h}-q{args.pad_w}"
+
+    if is_3d:
+        cmd += f"-# {args.conv_stride_d} "
+    cmd += f"-u {args.conv_stride_h} -v {args.conv_stride_w} "
+    trace_name += f"-u{args.conv_stride_h}-v{args.conv_stride_w}"
+
+    if is_3d:
+        cmd += f"-^ {args.dilation_d} "
+    cmd += f"-l {args.dilation_h} -j {args.dilation_w} "
+    trace_name += f"-l{args.dilation_h}-j{args.dilation_w}"
+    
+    cmd += f"-g {args.group_count} -m {args.mode} -_ {args.spatial_dim} "
+    trace_name += f"-g{args.group_count}"
+
+    cmd += f"-t {args.in_data_type} -S {args.solution} -V {args.verify}"
+    
+    # Add file parameters if specified
+    if args.in_data:
+        cmd += f" -d {args.in_data}"
+    if args.weights:
+        cmd += f" -e {args.weights}"
+    if args.dout_data:
+        cmd += f" -D {args.dout_data}"
+    if args.in_bias:
+        cmd += f" -a {args.in_bias}"
+
     # Wrapper function for convolution operations
     def run_convolution(operation):
         with record_function(f"convolution_{operation}"):
@@ -211,10 +255,12 @@ def main():
         operations.append(2)  # Backward data
     if args.forw in [0, 4, 5, 6]:
         operations.append(4)  # Backward weight
-    print(operations)
+    #print(operations)
     # Configure profiler if trace is requested
     if args.trace:
-        trace_path = os.path.abspath(args.trace)
+        prefix = args.trace.split(".")[0]
+        trace_path = f"{prefix}_{trace_name}.json"
+        trace_path = os.path.abspath(trace_path)
         trace_dir = os.path.dirname(trace_path)
         if trace_dir and not os.path.exists(trace_dir):
             os.makedirs(trace_dir)
@@ -243,6 +289,7 @@ def main():
         prof.export_chrome_trace(trace_path)
         print(f"PyTorch trace saved to {trace_path}")
     else:
+
         # Run without tracing
         for op in operations:
             for _ in range(args.iter):
@@ -283,41 +330,7 @@ def main():
         print(f"Stride: (H:{args.conv_stride_h}, W:{args.conv_stride_w})")
         print(f"Dilation: (H:{args.dilation_h}, W:{args.dilation_w})")
     
-    # Generate equivalent MIOpenDriver command
-    cmd = f"MIOpenDriver conv{type_str} -F {args.forw} -n {args.batchsize} -c {args.in_channels} "
     
-    if is_3d:
-        cmd += f"-d {args.in_d} "
-    cmd += f"-H {args.in_h} -W {args.in_w} -k {args.out_channels} "
-    
-    if is_3d:
-        cmd += f"-@ {args.fil_d} "
-    cmd += f"-y {args.fil_h} -x {args.fil_w} "
-    
-    if is_3d:
-        cmd += f"-$ {args.pad_d} "
-    cmd += f"-p {args.pad_h} -q {args.pad_w} "
-    
-    if is_3d:
-        cmd += f"-# {args.conv_stride_d} "
-    cmd += f"-u {args.conv_stride_h} -v {args.conv_stride_w} "
-    
-    if is_3d:
-        cmd += f"-^ {args.dilation_d} "
-    cmd += f"-l {args.dilation_h} -j {args.dilation_w} "
-    
-    cmd += f"-g {args.group_count} -m {args.mode} -_ {args.spatial_dim} "
-    cmd += f"-t {args.in_data_type} -S {args.solution} -V {args.verify}"
-    
-    # Add file parameters if specified
-    if args.in_data:
-        cmd += f" -d {args.in_data}"
-    if args.weights:
-        cmd += f" -e {args.weights}"
-    if args.dout_data:
-        cmd += f" -D {args.dout_data}"
-    if args.in_bias:
-        cmd += f" -a {args.in_bias}"
     
     print(f"\nEquivalent MIOpenDriver command:\n{cmd}")
     print('='*80)
