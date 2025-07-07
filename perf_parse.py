@@ -46,7 +46,7 @@ def main():
     
     # Print results
     print("\nPyTorch Kernel Performance Report")
-    print("=" * 80)
+    print("=" * 120)
     print(f"{'Kernel Name':<60} {'Calls':>8} {'Total Time (ms)':>15} {'Avg Time (ms)':>15}")
     print("-" * 80)
     
@@ -56,11 +56,11 @@ def main():
         total_time_ms = total_time_us / 1000
         avg_time_ms = total_time_ms / count if count > 0 else 0
         
-        line = f"{name[:58]:<60} {count:>8} {total_time_ms:>15.3f} {avg_time_ms:>15.5f}"
+        line = f"{name[:78]:<80} {count:>8} {total_time_ms:>15.3f} {avg_time_ms:>15.5f}"
         print(line)
         output_lines.append(f"{name},{count},{total_time_ms:.3f},{avg_time_ms:.5f}\n")
     
-    print("=" * 80)
+    print("=" * 120)
     print(f"Total kernels: {len(kernel_stats)}")
     print(f"Total kernel execution time: {sum(t for _,_,t in kernel_stats)/1000:.3f} ms")
     
