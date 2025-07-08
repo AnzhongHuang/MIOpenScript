@@ -11,3 +11,6 @@
 
 ## Parse pytorch trace
     python perf_parse.py --trace trace.json --output trace.log
+
+## Diff MIOpen logs
+    python miopenlog_diff.py --log1 xxx --log2 xxx

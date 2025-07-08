@@ -42,15 +42,15 @@ def parse_miopen_log(log_path):
             test_data['elapsed'] = -1.0
         
         # Extract verification status and value
-        verifies_match = re.search(r'Verifies OK.*?\((\d+\.\d+) < \d+\.\d+\)', test_case)
-        failed_match = re.search(r'FAILED.*?\((\d+\.\d+) > \d+\.\d+\)', test_case)
+        verifies_match = re.search(r'Verifies OK .*? \((.+?) < \d+\.\d+\)', test_case)
+        failed_match = re.search(r'FAILED.*?(.+?) > \d+\.\d+', test_case)
         
         if verifies_match:
             test_data['verification'] = "OK"
             test_data['verify_value'] = float(verifies_match.group(1))
         elif failed_match:
             test_data['verification'] = "FAILED"
-            test_data['verify_value'] = float(failed_match.group(1))
+            test_data['verify_value'] = 1
         else:
             test_data['verification'] = "N/A"
             test_data['verify_value'] = -1.0
@@ -84,8 +84,8 @@ def create_solution_summary(results):
 
 def plot_solution_performance(solution_stats):
     # Sort solutions by total time
-    sorted_solutions = sorted(solution_stats.items(), 
-                             key=lambda x: x[1]['total_time'], 
+    sorted_solutions = sorted(solution_stats.items(),
+                             key=lambda x: x[1]['total_time'],
                              reverse=True)
     
     indices = list(range(1, len(sorted_solutions) + 1))
@@ -124,7 +124,7 @@ def plot_solution_comparison(solution_stats1, solution_stats2, label1="Log1", la
     # Create combined solution list sorted by combined total time
     all_solutions = sorted(set(solution_stats1.keys()) | set(solution_stats2.keys()), 
                           key=lambda s: solution_stats1.get(s, {'total_time': 0})['total_time'] + 
-                                       solution_stats2.get(s, {'total_time': 0})['total_time'], 
+                                       solution_stats2.get(s, {'total_time': 0})['total_time'],
                           reverse=True)
     
     indices = np.arange(len(all_solutions))
@@ -147,16 +147,16 @@ def plot_solution_comparison(solution_stats1, solution_stats2, label1="Log1", la
     plt.ylabel('Total Time (ms)', fontsize=12)
     plt.xticks(indices, all_solutions, rotation=10, ha='right', fontsize=10)
     plt.legend()
-    
+
     # Add value labels on top of bars
     for i, (v1, v2) in enumerate(zip(total_times1, total_times2)):
         if v1 > 0:
-            plt.text(i - width/2, v1 + 0.01*max(total_times1 + total_times2), 
+            plt.text(i - width/2, v1 + 0.01*max(total_times1 + total_times2),
                      f'{v1:.1f}', ha='center', va='bottom', fontsize=9)
         if v2 > 0:
-            plt.text(i + width/2, v2 + 0.01*max(total_times1 + total_times2), 
+            plt.text(i + width/2, v2 + 0.01*max(total_times1 + total_times2),
                      f'{v2:.1f}', ha='center', va='bottom', fontsize=9)
-    
+
     # Add grid and adjust layout
     plt.grid(axis='y', alpha=0.3)
     plt.tight_layout()
@@ -166,12 +166,12 @@ def plot_solution_comparison(solution_stats1, solution_stats2, label1="Log1", la
     print("Comparison chart saved as 'solution_comparison.png'")
     plt.show()
 
-def TestVerification(results):
+def TestVerification(prefix, results):
     total_test = len(results)
     ok_count = sum(1 for test in results if test['verification'] == "OK")
     failed_count = sum(1 for test in results if test['verification'] == "FAILED")
-    print(f"Total test count: {total_test}")
-    print(f"Verification results: OK: {ok_count}, Failed: {failed_count}")
+    print(f"{prefix}: Total test count: {total_test}")
+    print(f"    Verification results: OK: {ok_count}, Failed: {failed_count}")
     print()
 
 def main():
@@ -187,19 +187,17 @@ def main():
     results2 = parse_miopen_log(log_path2)
     
     # Print basic results
-    print("LOG1:")
-    TestVerification(results1)
-    print("LOG2:")
-    TestVerification(results2)
+    TestVerification("Log1", results1)
+    TestVerification("Log2", results2)
     
     # Generate solution summary
     solution_stats1  = create_solution_summary(results1)
     solution_stats2 = create_solution_summary(results2)
 
     # Create combined solution list
-    all_solutions = sorted(set(solution_stats1.keys()) | set(solution_stats2.keys()), 
+    all_solutions = sorted(set(solution_stats1.keys()) | set(solution_stats2.keys()),
                           key=lambda s: solution_stats1.get(s, {'total_time': 0})['total_time'] + 
-                                       solution_stats2.get(s, {'total_time': 0})['total_time'], 
+                                       solution_stats2.get(s, {'total_time': 0})['total_time'],
                           reverse=True)
 
     # Print combined solution summary
@@ -211,11 +209,11 @@ def main():
     for idx, solution in enumerate(all_solutions, 1):
         stats1 = solution_stats1.get(solution, {'count': 0, 'total_time': 0, 'avg_time': 0})
         stats2 = solution_stats2.get(solution, {'count': 0, 'total_time': 0, 'avg_time': 0})
-    
+
         count1 = stats1['count']
         total_time1 = stats1['total_time']
         avg_time1 = stats1['avg_time']
-    
+
         count2 = stats2['count']
         total_time2 = stats2['total_time']
         avg_time2 = stats2['avg_time']
