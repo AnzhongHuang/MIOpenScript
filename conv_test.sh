@@ -11,12 +11,15 @@ G1F2_TEST=false
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --run)
-            if [[ "$2" == "py" ]]; then
-                MIOpenDriver="python mi_conv_torch.py"
-                TRACE="--trace trace.json"
-                shift
-            fi
+        --trace)
+            MIOpenDriver="python mi_conv_torch.py"
+            TRACE+=" --trace $2"
+            shift
+            ;;
+        --event)
+            MIOpenDriver="python mi_conv_torch.py"
+            TRACE+=" --event $2"
+            shift
             ;;
         --g1f2)
             if [[ "$2" == "1" ]]; then

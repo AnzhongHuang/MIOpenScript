@@ -77,7 +77,9 @@ def main():
     # Trace option
     parser.add_argument('--trace', type=str, default='', 
                         help='Path to save PyTorch execution trace log')
-    
+    parser.add_argument('--event', type=str, default='', 
+                        help='Path to save PyTorch execution trace events')
+
     # Additional MIOpenDriver parameters
     parser.add_argument('-i', '--iter', type=int, default=10, help='Number of iterations')
     parser.add_argument('-z', '--pad_mode', type=str, default='default', 
@@ -230,70 +232,91 @@ def main():
                 return conv_fn(input_tensor, weight, bias, **conv_args)
                 
             elif operation == 2:  # Backward data
-                output = conv_fn(input_tensor, weight, bias, **conv_args)
-                return torch.autograd.grad(
-                    outputs=output,
-                    inputs=input_tensor,
-                    grad_outputs=grad_output,
-                    retain_graph=True
-                )[0]
+                output_mask = [True, False, False]
+                grad_input, grad_weight, _ = torch.ops.aten.convolution_backward(
+                    grad_output=grad_output,
+                    input=input_tensor,
+                    weight=weight,
+                    bias_sizes=[0],          # [0] indicates no bias in forward pass
+                    stride=conv_args['stride'],
+                    padding=conv_args['padding'],
+                    dilation=conv_args['dilation'],
+                    transposed=False,
+                    output_padding=(0, 0),
+                    groups=conv_args['groups'],
+                    output_mask=output_mask
+                )
+
+                return grad_input
                 
             elif operation == 4:  # Backward weight
-                output = conv_fn(input_tensor, weight, bias, **conv_args)
-                return torch.autograd.grad(
-                    outputs=output,
-                    inputs=weight,
-                    grad_outputs=grad_output,
-                    retain_graph=True
-                )[0]
+                output_mask = [False, True, False]
+                grad_input, grad_weight, _ = torch.ops.aten.convolution_backward(
+                    grad_output=grad_output,
+                    input=input_tensor,
+                    weight=weight,
+                    bias_sizes=[0],          # [0] indicates no bias in forward pass
+                    stride=conv_args['stride'],
+                    padding=conv_args['padding'],
+                    dilation=conv_args['dilation'],
+                    transposed=False,
+                    output_padding=(0, 0),
+                    groups=conv_args['groups'],
+                    output_mask=output_mask
+                )
+
+                return grad_weight
     
-    # Determine operations to run based on -F flag
-    operations = []
-    if args.forw in [0, 1, 3, 5]:
-        operations.append(1)  # Forward
-    if args.forw in [0, 2, 3, 6]:
-        operations.append(2)  # Backward data
-    if args.forw in [0, 4, 5, 6]:
-        operations.append(4)  # Backward weight
-    #print(operations)
+    forw = args.forw
+
     # Configure profiler if trace is requested
-    if args.trace:
+    if args.trace or args.event:
         prefix = args.trace.split(".")[0]
         trace_path = f"{prefix}_{trace_name}.json"
         trace_path = os.path.abspath(trace_path)
         trace_dir = os.path.dirname(trace_path)
         if trace_dir and not os.path.exists(trace_dir):
             os.makedirs(trace_dir)
-        
+
+        prefix = args.event.split(".")[0]
+        event_path = f"{prefix}_{trace_name}_event.json"
+        event_path = os.path.abspath(event_path)
+
         print(f"\nStarting PyTorch trace capture (saving to {trace_path})")
         
         # Warm-up run
         for _ in range(3):
-            for op in operations:
-                result = run_convolution(op)
+            result = run_convolution(forw)
             torch.cuda.synchronize()
         
         # Actual trace capture
         with profile(
-            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            activities=[ProfilerActivity.CUDA],
             record_shapes=True,
-            with_stack=True,
+            with_stack=False,
             with_flops=True
         ) as prof:
-            for op in operations:
-                for _ in range(args.iter):
-                    result = run_convolution(op)
+            for _ in range(args.iter):
+                result = run_convolution(forw)
             torch.cuda.synchronize()
         
         # Save trace
-        prof.export_chrome_trace(trace_path)
-        print(f"PyTorch trace saved to {trace_path}")
+        if (args.trace):
+            prof.export_chrome_trace(trace_path)
+            print(f"PyTorch trace saved to {trace_path}")
+        if (args.event):
+            events = prof.key_averages(group_by_input_shape=False).table(
+                sort_by="self_cuda_time_total", row_limit=120
+            )
+            with open(event_path, "w") as file:
+                file.write(events)
+            print(events)
+            print(f"Events have been written to {event_path}")
     else:
 
         # Run without tracing
-        for op in operations:
-            for _ in range(args.iter):
-                result = run_convolution(op)
+        for _ in range(args.iter):
+            result = run_convolution(forw)
     
     # Print results
     op_names = {
@@ -301,7 +324,7 @@ def main():
         2: "BWD Data",
         4: "BWD Weight"
     }
-    operations_str = ", ".join(op_names[op] for op in operations)
+    operations_str = ", ".join(op_names[forw])
     
     print(f"\n{'='*80}")
     print(f"PyTorch MIOpenDriver Simulation ({type_str.upper()})")
