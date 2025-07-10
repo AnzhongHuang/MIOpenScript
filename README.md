@@ -4,7 +4,7 @@
     ./conv_test.sh
 
 ## Run via pytorch
-    ./conv_test.sh --run py
+    ./conv_test.sh --trace trace.json --event event.log
 
 ## Run -g=1 bwd tests
     ./conv_test.sh --g1f2 1
