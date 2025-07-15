@@ -73,12 +73,6 @@ def main():
     # Bias
     parser.add_argument('-b', '--bias', type=int, default=0, help='Use bias')
     parser.add_argument('-a', '--in_bias', type=str, default='', help='Input bias filename')
-    
-    # Trace option
-    parser.add_argument('--trace', type=str, default='', 
-                        help='Path to save PyTorch execution trace log')
-    parser.add_argument('--event', type=str, default='', 
-                        help='Path to save PyTorch execution trace events')
 
     # Additional MIOpenDriver parameters
     parser.add_argument('-i', '--iter', type=int, default=10, help='Number of iterations')
@@ -100,7 +94,15 @@ def main():
                         help='Search kernel config')
     parser.add_argument('-C', '--verification_cache', type=str, default='', 
                         help='Verification cache directory')
-    
+
+    # Trace option
+    parser.add_argument('--trace', type=str, default='',
+                        help='Path to save PyTorch execution trace log')
+    parser.add_argument('--event', type=str, default='',
+                        help='Path to save PyTorch execution trace events')
+    parser.add_argument('--warmup', type=int, default=3,
+                        help='warmup count')
+
     # Parse known args (ignore extra)
     args, _ = parser.parse_known_args()
     
@@ -283,11 +285,15 @@ def main():
         event_path = os.path.abspath(event_path)
 
         print(f"\nStarting PyTorch trace capture (saving to {trace_path})")
-        
+
+        if args.search:
+            torch.backends.cudnn.benchmark=True
+
         # Warm-up run
-        for _ in range(3):
-            result = run_convolution(forw)
-            torch.cuda.synchronize()
+        if (args.warmup > 0):
+            for _ in range(args.warmup):
+                result = run_convolution(forw)
+                torch.cuda.synchronize()
         
         # Actual trace capture
         with profile(
