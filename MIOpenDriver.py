@@ -271,6 +271,15 @@ def main():
     
     forw = args.forw
 
+    if args.search:
+        torch.backends.cudnn.benchmark=True
+
+    # Warm-up run
+    if (args.warmup > 0):
+        for _ in range(args.warmup):
+            result = run_convolution(forw)
+            torch.cuda.synchronize()
+
     # Configure profiler if trace is requested
     if args.trace or args.event:
         prefix = args.trace.split(".")[0]
@@ -286,25 +295,17 @@ def main():
 
         print(f"\nStarting PyTorch trace capture (saving to {trace_path})")
 
-        if args.search:
-            torch.backends.cudnn.benchmark=True
-
-        # Warm-up run
-        if (args.warmup > 0):
-            for _ in range(args.warmup):
-                result = run_convolution(forw)
-                torch.cuda.synchronize()
-        
         # Actual trace capture
         with profile(
-            activities=[ProfilerActivity.CUDA],
+            activities=[ProfilerActivity.CUDA, ProfilerActivity.CPU],
             record_shapes=True,
             with_stack=False,
             with_flops=True
         ) as prof:
+            elapsed_time_ms = 0
             for _ in range(args.iter):
                 result = run_convolution(forw)
-            torch.cuda.synchronize()
+                torch.cuda.synchronize()
         
         # Save trace
         if (args.trace):
@@ -319,10 +320,21 @@ def main():
             print(events)
             print(f"Events have been written to {event_path}")
     else:
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
 
-        # Run without tracing
+        elapsed_time_ms = 0
         for _ in range(args.iter):
+            torch.cuda.synchronize()
+            start_event.record()
             result = run_convolution(forw)
+            end_event.record()
+            torch.cuda.synchronize()
+
+            elapsed_time_ms += start_event.elapsed_time(end_event)
+
+        # The elapsed time is bigger than kernel execution time
+        print(f"execution time: {elapsed_time_ms/args.iter:.3f} ms")
     
     # Print results
     op_names = {
@@ -331,38 +343,6 @@ def main():
         4: "BWD Weight"
     }
     operations_str = ", ".join(op_names[forw])
-    
-    print(f"\n{'='*80}")
-    print(f"PyTorch MIOpenDriver Simulation ({type_str.upper()})")
-    print(f"Operations: {operations_str} (F={args.forw}), Solution: {args.solution}")
-    print(f"Spatial Dim: {'3D' if is_3d else '2D'}, Mode: {args.mode}")
-    print(f"Input:  ({args.batchsize}, {args.in_channels}, ", end="")
-    if is_3d:
-        print(f"{args.in_d}, {args.in_h}, {args.in_w})")
-    else:
-        print(f"{args.in_h}, {args.in_w})")
-    
-    print(f"Filter: ({args.out_channels}, {in_channels_per_group}, ", end="")
-    if is_3d:
-        print(f"{args.fil_d}, {args.fil_h}, {args.fil_w})")
-    else:
-        print(f"{args.fil_h}, {args.fil_w})")
-    
-    print(f"Groups: {args.group_count}, Bias: {'Yes' if args.bias else 'No'}")
-    
-    if is_3d:
-        print(f"Padding: (D:{args.pad_d}, H:{args.pad_h}, W:{args.pad_w})")
-        print(f"Stride: (D:{args.conv_stride_d}, H:{args.conv_stride_h}, W:{args.conv_stride_w})")
-        print(f"Dilation: (D:{args.dilation_d}, H:{args.dilation_h}, W:{args.dilation_w})")
-    else:
-        print(f"Padding: (H:{args.pad_h}, W:{args.pad_w})")
-        print(f"Stride: (H:{args.conv_stride_h}, W:{args.conv_stride_w})")
-        print(f"Dilation: (H:{args.dilation_h}, W:{args.dilation_w})")
-    
-    
-    
-    print(f"\nEquivalent MIOpenDriver command:\n{cmd}")
-    print('='*80)
 
 if __name__ == "__main__":
     main()
