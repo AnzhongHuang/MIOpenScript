@@ -1,19 +1,21 @@
 import torch
+import time
 import torch.nn.functional as F
 import argparse
 import sys
 import os
 import numpy as np
+import shlex
+import concurrent.futures
+import itertools
 from torch.profiler import profile, record_function, ProfilerActivity
 
-def main():
-    # Parse command name to determine data type
-    command_name = sys.argv[1] if len(sys.argv) > 1 else "conv"
+def ParseParam(args_list):
+    command_name = args_list[0] if len(sys.argv) > 1 else "conv"
     is_fp16 = "fp16" in command_name.lower()
-    
+
     parser = argparse.ArgumentParser(description='PyTorch MIOpenDriver Simulator',
-                                     add_help=False)
-    
+                                add_help=False)
     # Operation type (F flag)
     parser.add_argument('-F', '--forw', type=int, required=True, 
                         choices=[0, 1, 2, 3, 4, 5, 6], 
@@ -100,12 +102,20 @@ def main():
                         help='Path to save PyTorch execution trace log')
     parser.add_argument('--event', type=str, default='',
                         help='Path to save PyTorch execution trace events')
-    parser.add_argument('--warmup', type=int, default=3,
+    parser.add_argument('--warmup', type=int, default=5,
                         help='warmup count')
+    parser.add_argument('--gpu', type=int, default=0,
+                        help='GPU index')
 
     # Parse known args (ignore extra)
-    args, _ = parser.parse_known_args()
-    
+    args, _ = parser.parse_known_args(args_list)
+
+    return args, is_fp16
+
+def RunConv(device, args, is_fp16, gpu_idx):
+    # which device to use
+    torch.cuda.set_device(device)
+
     # Determine data type
     if is_fp16 or args.in_data_type == 2:
         dtype = torch.float16
@@ -113,10 +123,7 @@ def main():
     else:
         dtype = torch.float32
         type_str = "fp32"
-    
-    # Set device
-    device = torch.device('cuda')
-    
+
     # Determine spatial dimension
     is_3d = args.spatial_dim == 3
     conv_fn = F.conv3d if is_3d else F.conv2d
@@ -278,7 +285,7 @@ def main():
     if (args.warmup > 0):
         for _ in range(args.warmup):
             result = run_convolution(forw)
-            torch.cuda.synchronize()
+        torch.cuda.synchronize()
 
     # Configure profiler if trace is requested
     if args.trace or args.event:
@@ -302,10 +309,21 @@ def main():
             with_stack=False,
             with_flops=True
         ) as prof:
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event   = torch.cuda.Event(enable_timing=True)
+
             elapsed_time_ms = 0
+            torch.cuda.synchronize()
+            start_event.record()
             for _ in range(args.iter):
                 result = run_convolution(forw)
-                torch.cuda.synchronize()
+
+            end_event.record()
+            torch.cuda.synchronize()
+            elapsed_time_ms += start_event.elapsed_time(end_event)
+
+            # The elapsed time is bigger than kernel execution time
+            print(f"execution time: {elapsed_time_ms/args.iter:.3f} ms")
         
         # Save trace
         if (args.trace):
@@ -320,21 +338,24 @@ def main():
             print(events)
             print(f"Events have been written to {event_path}")
     else:
-        start_event = torch.cuda.Event(enable_timing=True)
-        end_event = torch.cuda.Event(enable_timing=True)
+        start_event = [torch.cuda.Event(enable_timing=True) for _ in range(args.iter)]
+        end_event =   [torch.cuda.Event(enable_timing=True) for _ in range(args.iter)]
 
         elapsed_time_ms = 0
+        torch.cuda.synchronize()
+        start_event[0].record()
         for _ in range(args.iter):
-            torch.cuda.synchronize()
-            start_event.record()
-            result = run_convolution(forw)
-            end_event.record()
-            torch.cuda.synchronize()
 
-            elapsed_time_ms += start_event.elapsed_time(end_event)
+            result = run_convolution(forw)
+        end_event[0].record()
+
+        torch.cuda.synchronize()
+
+        t = start_event[0].elapsed_time(end_event[0])
+        elapsed_time_ms += t
 
         # The elapsed time is bigger than kernel execution time
-        print(f"execution time: {elapsed_time_ms/args.iter:.3f} ms")
+        print(f"GPU {gpu_idx} - execution time: {elapsed_time_ms/(args.iter):.4f} ms")
     
     # Print results
     op_names = {
@@ -343,6 +364,64 @@ def main():
         4: "BWD Weight"
     }
     operations_str = ", ".join(op_names[forw])
+
+def ParseRunList(file_path):
+    convRunList = []
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+
+    for line in lines:
+        command_line = line.strip()
+        if command_line:
+            try:
+                args_list = shlex.split(command_line)
+                args, isfp16 = ParseParam(args_list[1:])
+                convRunList.append((args, isfp16))
+
+            except Exception as e:
+                print(f"Error parsing command line: {command_line}\n{e}")
+    return convRunList
+
+def Solve():
+    # Set device
+    num_gpus = torch.cuda.device_count()
+    devices = [torch.device(f'cuda:{i}') for i in range(num_gpus)]
+
+    fileInput = "--input" in sys.argv[1]
+    if fileInput:
+        convRunList = ParseRunList(sys.argv[2])
+
+        #for args, isfp16 in (convRunList):
+        #    RunConv(devices[args.gpu], args, isfp16)
+        #parser.add_argument('--input', type=str, help='Input file containing command lines')
+        gpu_ids = itertools.cycle(range(num_gpus))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_gpus) as executor:
+            gpu_idx = next(gpu_ids)
+            futures = []
+            for args, isfp16 in convRunList:
+                # Get the next GPU ID in the cycle
+                gpu_idx = next(gpu_ids)
+                # Submit the task to the executor
+                futures.append(executor.submit(RunConv, devices[gpu_idx], args, isfp16, gpu_idx))
+
+            # Optionally wait for all futures to complete
+            concurrent.futures.wait(futures)
+
+    else:
+        # Parse command name to determine data type
+        command_name = sys.argv[1] if len(sys.argv) > 1 else "conv"
+        is_fp16 = "fp16" in command_name.lower()
+        args, isfp16 = ParseParam(sys.argv[1:])
+
+        RunConv(devices[args.gpu], args, isfp16, args.gpu)
+
+def main():
+    start_time = time.time()
+    Solve()
+    end_time   = time.time()
+
+    elapsed_time = (end_time - start_time) * 1000
+    print(f"CPU time: {elapsed_time:.6f} ms" )
 
 if __name__ == "__main__":
     main()
