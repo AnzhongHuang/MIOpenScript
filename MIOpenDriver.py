@@ -116,6 +116,10 @@ def RunConv(device, args, is_fp16, gpu_idx):
     # which device to use
     torch.cuda.set_device(device)
 
+    # soluion works only without user db
+    if args.solution >= 0:
+        os.environ["MIOPEN_DEBUG_FIND_ONLY_SOLVER"] = str(args.solution)
+
     # Determine data type
     if is_fp16 or args.in_data_type == 2:
         dtype = torch.float16
