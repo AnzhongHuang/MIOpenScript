@@ -1,3 +1,4 @@
+from html import parser
 import torch
 import time
 import torch.nn.functional as F
@@ -9,10 +10,22 @@ import shlex
 import concurrent.futures
 import itertools
 from torch.profiler import profile, record_function, ProfilerActivity
+from enum import Enum
+import miopUtil.shapeConvert as shapeConvert
+from miopUtil.shapeConvert import MiopenDataType
 
 def ParseParam(args_list):
     command_name = args_list[0] if len(sys.argv) > 1 else "conv"
-    is_fp16 = "fp16" in command_name.lower()
+    if "fp16" in command_name.lower():
+        in_data_type = MiopenDataType.miopenHalf
+    elif "bfp16" in command_name.lower():
+        in_data_type = MiopenDataType.miopenBFloat16
+    elif "int8" in command_name.lower():
+        in_data_type = MiopenDataType.miopenInt8
+    elif "fp32" in command_name.lower():
+        in_data_type = MiopenDataType.miopenFloat
+    elif "fp64" in command_name.lower():
+        in_data_type = MiopenDataType.miopenDouble
 
     parser = argparse.ArgumentParser(description='PyTorch MIOpenDriver Simulator',
                                 add_help=False)
@@ -60,8 +73,8 @@ def ParseParam(args_list):
     
     # Solver and data type
     parser.add_argument('-S', '--solution', type=int, default=-1, help='Solution ID')
-    parser.add_argument('-t', '--in_data_type', type=int, default=1, 
-                        help='Input data type (1=fp32, 2=fp16)')
+    parser.add_argument('-t', '--time', type=int, default=0,
+                        help='Print time in milliseconds')
     parser.add_argument('-V', '--verify', type=int, default=1, 
                         help='Verification mode (0=no, 1=yes)')
     parser.add_argument('-m', '--mode', default='conv', 
@@ -107,12 +120,52 @@ def ParseParam(args_list):
     parser.add_argument('--gpu', type=int, default=0,
                         help='GPU index')
 
+    parser.add_argument('--dbshape', type=int, default=0,
+                        help='verify db shape')
     # Parse known args (ignore extra)
     args, _ = parser.parse_known_args(args_list)
 
-    return args, is_fp16
+    return args, in_data_type
 
-def RunConv(device, args, is_fp16, gpu_idx):
+def RunConv(device, args, in_data_type, gpu_idx):
+
+    if args.dbshape:
+        problem = shapeConvert.ProblemDescription(
+            in_channels=args.in_channels if args.forw == 1 else args.out_channels,
+            spatial_dims=args.spatial_dim,
+            in_depth=args.in_d,
+            in_height=args.in_h,
+            in_width=args.in_w,
+            weights_depth=args.fil_d,
+            weights_height=args.fil_h,
+            weights_width=args.fil_w,
+            out_channels=args.out_channels if args.forw == 1 else args.in_channels,
+            out_depth=0,  # Will be calculated later
+            out_height=0,  # Will be calculated later
+            out_width=0,  # Will be calculated later
+            in_batch_size=args.batchsize,
+            pad_d=args.pad_d,
+            pad_h=args.pad_h,
+            pad_w=args.pad_w,
+            kernel_stride_d=args.conv_stride_d,
+            kernel_stride_h=args.conv_stride_h,
+            kernel_stride_w=args.conv_stride_w,
+            dilation_d=args.dilation_d,
+            dilation_h=args.dilation_h,
+            dilation_w=args.dilation_w,
+            bias=int(args.bias),
+            in_layout='NCHW' if args.spatial_dim == 2 else 'NCDHW',
+            weights_layout='NCHW' if args.spatial_dim == 2 else 'NCDHW',
+            out_layout='NCHW' if args.spatial_dim == 2 else 'NCDHW',
+            in_data_type=in_data_type,
+            weights_data_type=in_data_type,
+            out_data_type=in_data_type,
+            direction_str=shapeConvert.get_direction_str(args.forw),
+            group_count=args.group_count
+        )
+
+        # Print problem description
+        print(f"Problem Description: {problem.serialize()}")
     # which device to use
     torch.cuda.set_device(device)
 
@@ -121,9 +174,15 @@ def RunConv(device, args, is_fp16, gpu_idx):
         os.environ["MIOPEN_DEBUG_FIND_ONLY_SOLVER"] = str(args.solution)
 
     # Determine data type
-    if is_fp16 or args.in_data_type == 2:
+    if in_data_type == MiopenDataType.miopenHalf:
         dtype = torch.float16
         type_str = "fp16"
+    elif in_data_type == MiopenDataType.miopenBFloat16:
+        dtype = torch.bfloat16
+        type_str = "bf16"
+    elif in_data_type == MiopenDataType.miopenInt8:
+        dtype = torch.int8
+        type_str = "int8"
     else:
         dtype = torch.float32
         type_str = "fp32"
@@ -215,7 +274,7 @@ def RunConv(device, args, is_fp16, gpu_idx):
     cmd += f"-g {args.group_count} -m {args.mode} -_ {args.spatial_dim} "
     trace_name += f"-g{args.group_count}"
 
-    cmd += f"-t {args.in_data_type} -S {args.solution} -V {args.verify}"
+    cmd += f"-t {args.time} -S {args.solution} -V {args.verify}"
     
     # Add file parameters if specified
     if args.in_data:
@@ -379,8 +438,8 @@ def ParseRunList(file_path):
         if command_line:
             try:
                 args_list = shlex.split(command_line)
-                args, isfp16 = ParseParam(args_list[1:])
-                convRunList.append((args, isfp16))
+                args, in_data_type = ParseParam(args_list[1:])
+                convRunList.append((args, in_data_type))
 
             except Exception as e:
                 print(f"Error parsing command line: {command_line}\n{e}")
@@ -395,29 +454,27 @@ def Solve():
     if fileInput:
         convRunList = ParseRunList(sys.argv[2])
 
-        #for args, isfp16 in (convRunList):
-        #    RunConv(devices[args.gpu], args, isfp16)
+        #for args, in_data_type in (convRunList):
+        #    RunConv(devices[args.gpu], args, in_data_type)
         #parser.add_argument('--input', type=str, help='Input file containing command lines')
         gpu_ids = itertools.cycle(range(num_gpus))
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_gpus) as executor:
             gpu_idx = next(gpu_ids)
             futures = []
-            for args, isfp16 in convRunList:
+            for args, in_data_type in convRunList:
                 # Get the next GPU ID in the cycle
                 gpu_idx = next(gpu_ids)
                 # Submit the task to the executor
-                futures.append(executor.submit(RunConv, devices[gpu_idx], args, isfp16, gpu_idx))
+                futures.append(executor.submit(RunConv, devices[gpu_idx], args, in_data_type, gpu_idx))
 
             # Optionally wait for all futures to complete
             concurrent.futures.wait(futures)
 
     else:
         # Parse command name to determine data type
-        command_name = sys.argv[1] if len(sys.argv) > 1 else "conv"
-        is_fp16 = "fp16" in command_name.lower()
-        args, isfp16 = ParseParam(sys.argv[1:])
+        args, in_data_type = ParseParam(sys.argv[1:])
 
-        RunConv(devices[args.gpu], args, isfp16, args.gpu)
+        RunConv(devices[args.gpu], args, in_data_type, args.gpu)
 
 def main():
     start_time = time.time()
