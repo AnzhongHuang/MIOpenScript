@@ -12,7 +12,7 @@ import itertools
 from torch.profiler import profile, record_function, ProfilerActivity
 from enum import Enum
 import miopUtil.shapeConvert as shapeConvert
-from miopUtil.shapeConvert import MiopenDataType
+from miopUtil.MIArgs import MiopenDataType
 
 def ParseParam(args_list):
     command_name = args_list[0] if len(sys.argv) > 1 else "conv"
@@ -39,7 +39,7 @@ def ParseParam(args_list):
     parser.add_argument('-c', '--in_channels', type=int, required=True, help='Input channels')
     parser.add_argument('-H', '--in_h', type=int, required=True, help='Input height')
     parser.add_argument('-W', '--in_w', type=int, required=True, help='Input width')
-    parser.add_argument('-!', '--in_d', type=int, default=32, help='Input depth (3D)')
+    parser.add_argument('-!', '--in_d', type=int, default=1, help='Input depth (3D)')
     
     # Output channels
     parser.add_argument('-k', '--out_channels', type=int, required=True, help='Output channels')
@@ -47,7 +47,7 @@ def ParseParam(args_list):
     # Kernel parameters
     parser.add_argument('-y', '--fil_h', type=int, required=True, help='Filter height')
     parser.add_argument('-x', '--fil_w', type=int, required=True, help='Filter width')
-    parser.add_argument('-@', '--fil_d', type=int, default=3, help='Filter depth (3D)')
+    parser.add_argument('-@', '--fil_d', type=int, default=1, help='Filter depth (3D)')
     
     # Padding parameters
     parser.add_argument('-p', '--pad_h', type=int, default=0, help='Vertical padding')
@@ -57,12 +57,12 @@ def ParseParam(args_list):
     # Stride parameters
     parser.add_argument('-u', '--conv_stride_h', type=int, default=1, help='Vertical stride')
     parser.add_argument('-v', '--conv_stride_w', type=int, default=1, help='Horizontal stride')
-    parser.add_argument('-#', '--conv_stride_d', type=int, default=1, help='Depth stride (3D)')
+    parser.add_argument('-#', '--conv_stride_d', type=int, default=0, help='Depth stride (3D)')
     
     # Dilation parameters
     parser.add_argument('-l', '--dilation_h', type=int, default=1, help='Vertical dilation')
     parser.add_argument('-j', '--dilation_w', type=int, default=1, help='Horizontal dilation')
-    parser.add_argument('-^', '--dilation_d', type=int, default=1, help='Depth dilation (3D)')
+    parser.add_argument('-^', '--dilation_d', type=int, default=0, help='Depth dilation (3D)')
     
     # Groups
     parser.add_argument('-g', '--group_count', type=int, default=1, help='Number of groups')
@@ -163,9 +163,9 @@ def RunConv(device, args, in_data_type, gpu_idx):
             direction_str=shapeConvert.get_direction_str(args.forw),
             group_count=args.group_count
         )
+        problem.InitDef()
+        problem.test()
 
-        # Print problem description
-        print(f"Problem Description: {problem.serialize()}")
     # which device to use
     torch.cuda.set_device(device)
 
