@@ -1,7 +1,5 @@
 from html import parser
-import torch
 import time
-import torch.nn.functional as F
 import argparse
 import sys
 import os
@@ -9,7 +7,6 @@ import numpy as np
 import shlex
 import concurrent.futures
 import itertools
-from torch.profiler import profile, record_function, ProfilerActivity
 from enum import Enum
 import miopUtil.shapeConvert as shapeConvert
 from miopUtil.shapeConvert import MiopenDataType
