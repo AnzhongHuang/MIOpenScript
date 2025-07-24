@@ -62,8 +62,7 @@ def StatisticsSolver(solvers, problem):
         # params[0] is a float time in ms
         execTime = float(params[0])
         if (execTime == 0.0):
-            print(f"Warning: {solver_name} execution time is 0.0 ms, skipping this solver.", file=sys.stderr)
-            continue
+            print(f"Warning: {solver_name} execution time is 0.0 ms.", file=sys.stderr)
         # params[1] is a int
         workspaceSize = int(params[1])
         # params[2] is a string
@@ -72,7 +71,12 @@ def StatisticsSolver(solvers, problem):
         if execTime < best_solver_time:
             best_solver_time = execTime
             best_solver_name = solver_name
-        gflops = flopCnt / (execTime * 1e6)  # Convert ms to seconds
+
+          # Avoid division by zero in GFLOPS calculation, it should be a bug in db file.
+        if execTime == 0.0:
+            execTime = 0.001
+
+        gflops = flopCnt / (execTime * 1e6)
         if solver_name in solver_map:
             solver_map[solver_name].execTime += execTime
             solver_map[solver_name].gflops += gflops
