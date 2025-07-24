@@ -16,18 +16,19 @@ from miopUtil.shapeConvert import MiopenDataType
 from miopUtil.MIArgs import MIArgs
 
 def ParseParam(args_list):
-    command_name = args_list[0] if len(sys.argv) > 1 else "conv"
+    command_name = args_list[0] if len(args_list) > 1 else "conv"
     if "fp16" in command_name.lower():
         in_data_type = MiopenDataType.miopenHalf
-    elif "bfp16" in command_name.lower():
+    elif "bf16" in command_name.lower():
         in_data_type = MiopenDataType.miopenBFloat16
     elif "int8" in command_name.lower():
         in_data_type = MiopenDataType.miopenInt8
-    elif "fp32" in command_name.lower():
+    elif "conv" == command_name.lower():
         in_data_type = MiopenDataType.miopenFloat
     elif "fp64" in command_name.lower():
         in_data_type = MiopenDataType.miopenDouble
-
+    else:
+        print(f"Unknown {command_name} in command name: {args_list}")
     parser = argparse.ArgumentParser(description='PyTorch MIOpenDriver Simulator',
                                 add_help=False)
     # Operation type (F flag)
@@ -169,12 +170,16 @@ def ParseParam(args_list):
 
     return miargs
 
-def Solve():
+def Solve(argvs, is_solver=False):
+    seri = ""
     # Parse command name to determine data type
-    args = ParseParam(sys.argv[1:])
-    cmds, conv_type = shapeConvert.GetArgument(args)
-
+    args = ParseParam(argvs[1:])
+    if is_solver:
+        args.shapeformat = 'solver'
+    
     if args.shapeformat == 'vs':
+        cmds, conv_type = shapeConvert.GetArgument(args)
+
         # Print vsdb format
         print(f'"{conv_type}",')
         # Print parameters, e.g. "-a", f'"{in_bias}"', so I can fill them into vscode debugging
@@ -187,7 +192,7 @@ def Solve():
                 print(' ', end='')
     elif args.shapeformat == 'solver' or args.shapeformat == 'kernel':
         problem = shapeConvert.ProblemDescription(
-            in_channels=args.in_channels if args.forw == 1 else args.out_channels,
+            in_channels=args.in_channels,
             spatial_dims=args.spatial_dim,
             in_depth=args.in_d,
             in_height=args.in_h,
@@ -195,7 +200,7 @@ def Solve():
             weights_depth=args.fil_d,
             weights_height=args.fil_h,
             weights_width=args.fil_w,
-            out_channels=args.out_channels if args.forw == 1 else args.in_channels,
+            out_channels=args.out_channels,
             out_depth=0,  # Will be calculated later
             out_height=0,  # Will be calculated later
             out_width=0,  # Will be calculated later
@@ -210,9 +215,9 @@ def Solve():
             dilation_h=args.dilation_h,
             dilation_w=args.dilation_w,
             bias=int(args.bias),
-            in_layout='NCHW' if args.spatial_dim == 2 else 'NCDHW',
-            weights_layout='NCHW' if args.spatial_dim == 2 else 'NCDHW',
-            out_layout='NCHW' if args.spatial_dim == 2 else 'NCDHW',
+            in_layout=args.in_layout if args.in_layout else 'NCHW',
+            weights_layout=args.fil_layout if args.fil_layout else 'NCHW',
+            out_layout=args.out_layout if args.out_layout else 'NCHW',
             in_data_type=args.in_data_type,
             weights_data_type=args.in_data_type,
             out_data_type=args.in_data_type,
@@ -221,14 +226,48 @@ def Solve():
         )
         problem.InitDef()
         if args.shapeformat == 'solver':
-            print(problem.ufdbSerialize())
+            seri = problem.ufdbSerialize()
         elif args.shapeformat == 'kernel':
-            print(problem.udbSerialize())
+            seri = problem.udbSerialize()
+    return seri
+
+def Test(file_name):
+    with open(file_name, 'r') as f:
+        lines = f.readlines()
+    args_list = []
+
+    # open output file
+    output_file = 'test_passlist.txt'
+    f = open(output_file, 'w')
+    for line in lines:
+        if line.strip():
+            if line.startswith('#'):
+                orginal_line = line[1:].strip()
+            else:
+                args_line = line.strip()
+                # print(args_line)
+                seri = Solve(shlex.split(args_line), True)
+                if seri != orginal_line:
+                    print(f"Error: {seri} != {orginal_line}")
+                else:
+                    print(f"# {orginal_line}", file=f)
+                    print(args_line, file=f)
+                #else:
+                #    print(f"OK: {seri} == {orginal_line}")
+
 
 def main():
-    Solve()
+    seri = Solve(sys.argv[:])
+    print(seri)
 # python args_2_shape.py convfp16 -F 1 -n 128 -c 192 -H 1 -W 1 -k 8 -y 1 -x 1 -u 1 -v 1 -l 1 -j 1 -g 1 -m conv --spatial_dim 2 -t 1 --shapeformat solver
 # python args_2_shape.py convfp16 -F 1 -n 128 -c 192 -H 1 -W 1 -k 8 -y 1 -x 1 -u 1 -v 1 -l 1 -j 1 -g 1 -m conv --spatial_dim 2 -t 1 --shapeformat kernel
 # python args_2_shape.py convfp16 -F 1 -n 128 -c 192 -H 1 -W 1 -k 8 -y 1 -x 1 -u 1 -v 1 -l 1 -j 1 -g 1 -m conv --spatial_dim 2 -t 1 --shapeformat vs
 if __name__ == "__main__":
-    main()
+
+    if sys.argv[1] == '--test':
+        # print(sys.argv)
+        Test(sys.argv[2])
+        
+    else:
+        main()
+

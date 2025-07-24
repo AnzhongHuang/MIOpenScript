@@ -18,7 +18,9 @@ def print_hwd(sep, spatial_dims, height, width, depth):
         stream.append(sep.join(components))
     return inner
 
-MemLayout = ["NCHW", "CNHW", "NHWC", "CHWN", "HWCH", "HWNC", "NGCHW", "CGNHW", "GCNHW"]
+MemLayout = ["NCHW", "CNHW", "NHWC", "CHWN", "HWCH", "HWNC", "NGCHW", "CGNHW", "GCNHW",
+             "NCDHW", "CDNHW", "NDHWC", "DCHWN", "DHNWC", "DHNCW", "NCHWD", "CHNWD",
+             "NHWCD", "HWNCD", "NCDHW", "CDHNW", "NDHWC", "DCHWN", "DHNWC", "DHNCW"]
 
 def GetArgument(args):
     # Determine data type
@@ -29,7 +31,7 @@ def GetArgument(args):
     elif args.in_data_type == MiopenDataType.miopenInt8:
         type_str = "int8"
     else:
-        type_str = "fp32"
+        type_str = ""  # fp32 is default
 
     # Determine spatial dimension
     is_3d = args.spatial_dim == 3
@@ -46,12 +48,12 @@ def GetArgument(args):
     cmds.append(str(args.in_channels))
 
     if is_3d:
-        cmds.append("-d")
+        cmds.append("--in_d")
         cmds.append(str(args.in_d))
 
-    cmds.append("-H")
+    cmds.append("--in_h")
     cmds.append(str(args.in_h))
-    cmds.append("-W")
+    cmds.append("--in_w")
     cmds.append(str(args.in_w))
     cmds.append("-k")
     cmds.append(str(args.out_channels))
@@ -69,6 +71,11 @@ def GetArgument(args):
         cmds.append("--pad_d")
         cmds.append(str(args.pad_d))
 
+    cmds.append("--pad_h")
+    cmds.append(str(args.pad_h))
+    cmds.append("--pad_w")
+    cmds.append(str(args.pad_w))
+    
     if is_3d:
         cmds.append("--conv_stride_d")
         cmds.append(str(args.conv_stride_d))
@@ -99,9 +106,19 @@ def GetArgument(args):
         cmds.append("-S")
         cmds.append(str(args.solution))
     
+    if (args.in_layout != "NCHW" and args.in_layout != "NCDHW"):
+        cmds.append("--in_layout")
+        cmds.append(args.in_layout)
+    if (args.fil_layout != "NCHW" and args.fil_layout != "NCDHW"):
+        cmds.append("--fil_layout")
+        cmds.append(args.fil_layout)
+    if (args.out_layout != "NCHW" and args.out_layout != "NCDHW"):
+        cmds.append("--out_layout")
+        cmds.append(args.out_layout)
+        
     # Add file parameters if specified
     if args.in_data:
-        cmds.append("-d")
+        cmds.append("--in_data")
         cmds.append(args.in_data)
     if args.weights:
         cmds.append("-e")
@@ -174,6 +191,11 @@ class ProblemDescription:
         self.in_layout = in_layout
         self.weights_layout = weights_layout
         self.out_layout = out_layout
+        if ('D' not in self.in_layout and spatial_dims == 3):
+            self.in_layout = "NCDHW"
+            self.weights_layout = "NCDHW"
+            self.out_layout = "NCDHW"
+
         self.in_data_type = in_data_type
         self.weights_data_type = weights_data_type
         self.out_data_type = out_data_type
@@ -233,6 +255,7 @@ class ProblemDescription:
             verification_cache='',  # No verification cache by default
             trace='',  # No trace by default
             event='' ,# No event by default
+            in_data_type=problem.in_data_type
         )
 
     @staticmethod
@@ -277,24 +300,42 @@ class ProblemDescription:
         return problem
 
     def InitDef(self):
+        def calc_output_size(in_size, pad, kernel, stride, dilation=1):
+            return (in_size + 2*pad - dilation*(kernel - 1) - 1) // stride + 1
         if self.out_width == 0:
-            self.out_width = (self.in_width + 2 * self.pad_w - self.weights_width) // self.kernel_stride_w + 1
-        if self.out_height == 0:
-            self.out_height = (self.in_height + 2 * self.pad_h - self.weights_height) // self.kernel_stride_h + 1
+            self.out_width = calc_output_size(self.in_width, self.pad_w, self.weights_width, self.kernel_stride_w, self.dilation_w)
+        self.out_width = max(self.out_width, 1)
 
+        if self.out_height == 0:
+            self.out_height = calc_output_size(self.in_height, self.pad_h, self.weights_height, self.kernel_stride_h, self.dilation_h)
+
+        self.out_height = max(self.out_height, 1)
         kernel_stride_d = self.kernel_stride_d if self.kernel_stride_d > 0 else 1
         if self.out_depth == 0:
-            self.out_depth = (self.in_depth + 2 * self.pad_d - self.weights_depth) // kernel_stride_d + 1
+            self.out_depth = calc_output_size(self.in_depth, self.pad_d, self.weights_depth, kernel_stride_d, self.dilation_d)
 
+        self.out_depth = max(self.out_depth, 0)
+        
     def ufdbSerialize(self):
         sep = '-'
         stream = []
 
-        stream.append(str(self.in_channels))
-        print_dhw(sep, self.spatial_dims, self.in_depth, self.in_height, self.in_width)(stream)
+        if self.direction_str == "F":
+            stream.append(str(self.in_channels))
+            print_dhw(sep, self.spatial_dims, self.in_depth, self.in_height, self.in_width)(stream)
+        else:
+            stream.append(str(self.out_channels))
+            print_dhw(sep, self.spatial_dims, self.out_depth, self.out_height, self.out_width)(stream)
+  
         print_dhw('x', self.spatial_dims, self.weights_depth, self.weights_height, self.weights_width)(stream)
-        stream.append(str(self.out_channels))
-        print_dhw(sep, self.spatial_dims, self.out_depth, self.out_height, self.out_width)(stream)
+
+        if self.direction_str == "F":
+            stream.append(str(self.out_channels))
+            print_dhw(sep, self.spatial_dims, self.out_depth, self.out_height, self.out_width)(stream)
+        else:
+            stream.append(str(self.in_channels))
+            print_dhw(sep, self.spatial_dims, self.in_depth, self.in_height, self.in_width)(stream)
+  
         stream.append(str(self.in_batch_size))
         print_dhw('x', self.spatial_dims, self.pad_d, self.pad_h, self.pad_w)(stream)
         print_dhw('x', self.spatial_dims, self.kernel_stride_d, self.kernel_stride_h, self.kernel_stride_w)(stream)
@@ -327,10 +368,11 @@ class ProblemDescription:
         if self.out_cast_type is not None:
             optional.append(f"_co{get_data_type_name(self.out_cast_type)}")
 
+        res = '-'.join(stream)
         if optional:
-            stream.append(''.join(optional))
+            res += "".join(optional)
 
-        return '-'.join(stream)
+        return res
 
     # kernel shape serialization for UDB format
     # static void Visit(Self&& self, std::function<void(int64_t, std::string)> f)
@@ -487,7 +529,7 @@ class ProblemDescription:
         Deserialize a UFDB format string into a ProblemDescription object.
         """
         parts = problem.split('-')
-        
+
         idx = 0
         in_channels = int(parts[idx]); idx += 1
 
@@ -501,7 +543,7 @@ class ProblemDescription:
             in_depth = int(parts[idx]); idx += 1
             in_height = int(parts[idx]); idx += 1
             in_width = int(parts[idx]); idx += 1
-        
+
         if spatial_dims == 2:
             weights_depth = 1
             weights_height, weights_width = map(int, parts[idx].split('x')); idx += 1
@@ -517,7 +559,7 @@ class ProblemDescription:
             out_depth = int(parts[idx]); idx += 1
             out_height = int(parts[idx]); idx += 1
             out_width = int(parts[idx]); idx += 1
-        
+
         in_batch_size = int(parts[idx]); idx += 1
 
         if spatial_dims == 2:
@@ -568,13 +610,13 @@ class ProblemDescription:
         data_type_parts = []
         current_part = ""
         for char in data_types_str:
-            if char in beginning_letter and len(current_part) > 0:
+            if char in beginning_letter and len(current_part) > 2:
                 data_type_parts.append(current_part)
                 current_part = char
             else:
                 current_part += char
-        
-        if len(current_part) > 0:
+
+        if len(current_part) > 2:
             data_type_parts.append(current_part)
 
         # Convert each part to its corresponding enum value
@@ -585,41 +627,45 @@ class ProblemDescription:
         else:
             out_data_type = in_data_type
             weights_data_type = in_data_type
-        
+
+        last_part = parts[idx]; idx += 1
+        parts = last_part.split('_')
+        idx = 0
+
         direction_str = parts[idx]; idx += 1
 
         # _g{group_count} optional part
         group_count = 1
-        if idx < len(parts) and parts[idx].startswith('_g'):
-            group_count = int(parts[idx][2:])
+        if idx < len(parts) and parts[idx].startswith('g'):
+            group_count = int(parts[idx][1:])
             idx += 1
         # _ci{in_cast_type}, _cw{weights_cast_type}, _co{out_cast_type} optional parts
         in_cast_type = weights_cast_type = out_cast_type = None
         if idx < len(parts):
-            if parts[idx].startswith('_ci'):
-                in_cast_type = data_types_map.get(parts[idx][3:], MiopenDataType.miopenFloat)
+            if parts[idx].startswith('ci'):
+                in_cast_type = data_types_map.get(parts[idx][2:], MiopenDataType.miopenFloat)
                 idx += 1
-            if idx < len(parts) and parts[idx].startswith('_cw'):
-                weights_cast_type = data_types_map.get(parts[idx][3:], MiopenDataType.miopenFloat)
+            if idx < len(parts) and parts[idx].startswith('cw'):
+                weights_cast_type = data_types_map.get(parts[idx][2:], MiopenDataType.miopenFloat)
                 idx += 1
-            if idx < len(parts) and parts[idx].startswith('_co'):
-                out_cast_type = data_types_map.get(parts[idx][3:], MiopenDataType.miopenFloat)
+            if idx < len(parts) and parts[idx].startswith('co'):
+                out_cast_type = data_types_map.get(parts[idx][2:], MiopenDataType.miopenFloat)
                 idx += 1
 
         # Create and return problem description
         problem = ProblemDescription(
-            in_channels=in_channels,
+            in_channels=in_channels if direction_str == "F" else out_channels,
             spatial_dims=spatial_dims,
-            in_depth=in_depth,
-            in_height=in_height,
-            in_width=in_width,
+            in_depth=in_depth if direction_str == "F" else out_depth,
+            in_height=in_height if direction_str == "F" else out_height,
+            in_width=in_width if direction_str == "F" else out_width,
             weights_depth=weights_depth,
             weights_height=weights_height,
             weights_width=weights_width,
-            out_channels=out_channels,
-            out_depth=0,
-            out_height=0,
-            out_width=0,
+            out_channels=out_channels if direction_str == "F" else in_channels,
+            out_depth=out_depth if direction_str == "F" else in_depth,
+            out_height=out_height if direction_str == "F" else in_height,
+            out_width=out_width if direction_str == "F" else in_width,
             in_batch_size=in_batch_size,
             pad_d=pad_d,
             pad_h=pad_h,
@@ -643,7 +689,7 @@ class ProblemDescription:
             weights_cast_type=weights_cast_type,
             out_cast_type=out_cast_type
         )
-        problem.InitDef()
+        # problem.InitDef()
         return problem
     
     def test(self):

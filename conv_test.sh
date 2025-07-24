@@ -13,12 +13,12 @@ CONV3D_TEST=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --trace)
-            MIOpenDriver="python mi_conv_torch.py"
+            MIOpenDriver="python MIOpenDriver.py"
             TRACE+=" --trace $2"
             shift
             ;;
         --event)
-            MIOpenDriver="python mi_conv_torch.py"
+            MIOpenDriver="python MIOpenDriver.py"
             TRACE+=" --event $2"
             shift
             ;;
