@@ -27,7 +27,7 @@ def GetArgument(args):
     if args.in_data_type == MiopenDataType.miopenHalf:
         type_str = "fp16"
     elif args.in_data_type == MiopenDataType.miopenBFloat16:
-        type_str = "bf16"
+        type_str = "bfp16"
     elif args.in_data_type == MiopenDataType.miopenInt8:
         type_str = "int8"
     else:
