@@ -179,7 +179,7 @@ def RunConv(device, args, in_data_type, gpu_idx):
         type_str = "fp16"
     elif in_data_type == MiopenDataType.miopenBFloat16:
         dtype = torch.bfloat16
-        type_str = "bf16"
+        type_str = "bfp16"
     elif in_data_type == MiopenDataType.miopenInt8:
         dtype = torch.int8
         type_str = "int8"

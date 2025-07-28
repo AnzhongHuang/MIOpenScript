@@ -88,7 +88,7 @@ def StatisticsSolver(solvers, problem):
     # bump the best solver count
     if best_solver_name in solver_map:
         solver_map[best_solver_name].best_count += 1
-
+from miopUtil.MIArgs import MiopenDataType
 def Solve():
     global solver_map
     # Parse command name to determine data type
