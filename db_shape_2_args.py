@@ -1,6 +1,7 @@
 import miopUtil.shapeConvert as shapeConvert
 import argparse
 import sys
+from miopUtil.MIArgs import MiopenDataType
 
 def ParseUfdb(file_path):
     """
@@ -88,7 +89,155 @@ def StatisticsSolver(solvers, problem):
     # bump the best solver count
     if best_solver_name in solver_map:
         solver_map[best_solver_name].best_count += 1
-from miopUtil.MIArgs import MiopenDataType
+
+class PerfDbArgs:
+    def __init__(self, mode=1, datatype=1, dimension=2, direction=1, in_batch=-1, in_channel=-1,
+                 in_width=-1, in_height=-1, in_depth=-1, filter_width=-1, filter_height=-1,
+                 filter_depth=-1, out_channel=-1, pad_width=0, pad_height=0, pad_depth=0,
+                 step_width=1, step_height=1, step_depth=-1, dilation_width=1,
+                 dilation_height=1, dilation_depth=-1, groups=1, in_layout=1,
+                 filter_layout=1, out_layout=1, bias=0):
+        self.mode = mode
+        self.datatype = datatype
+        self.dimension = dimension
+        self.direction = direction
+        self.in_batch = in_batch
+        self.in_channel = in_channel
+        self.in_width = in_width
+        self.in_height = in_height
+        self.in_depth = in_depth
+        self.filter_width = filter_width
+        self.filter_height = filter_height
+        self.filter_depth = filter_depth
+        self.out_channel = out_channel
+        self.pad_width = pad_width
+        self.pad_height = pad_height
+        self.pad_depth = pad_depth
+        self.step_width = step_width
+        self.step_height = step_height
+        self.step_depth = step_depth
+        self.dilation_width = dilation_width
+        self.dilation_height = dilation_height
+        self.dilation_depth = dilation_depth
+        self.groups = groups
+        self.in_layout = in_layout
+        self.filter_layout = filter_layout
+        self.out_layout = out_layout
+        self.bias = bias
+
+    @staticmethod
+    def PrintMIOpen(perfdb):
+        def_val = PerfDbArgs()
+        exec_str = "MIOpenDriver "
+        if perfdb.mode == 1:
+            exec_str += 'conv'
+        else:
+            # error
+            raise ValueError("Unsupported mode in PerfDbArgs")
+        if perfdb.datatype == 1:
+            pass
+        elif perfdb.datatype == 2:
+            exec_str += 'fp16'
+        elif perfdb.datatype == 3:
+            exec_str += 'bfp16'
+        else:
+            raise ValueError("Unsupported datatype in PerfDbArgs")
+
+        if perfdb.dimension != def_val.dimension:
+            exec_str += f' --spatial_dim {perfdb.dimension}'
+
+        exec_str += f' -F {perfdb.direction}'
+
+        exec_str += f' -n {perfdb.in_batch}'
+        exec_str += f' -c {perfdb.in_channel}'
+        exec_str += f' -H {perfdb.in_height}'
+        exec_str += f' -W {perfdb.in_width}'
+        if perfdb.in_depth != def_val.in_depth:
+            exec_str += f' --in_d {perfdb.in_depth}'
+
+        exec_str += f' -k {perfdb.out_channel}'
+        exec_str += f' -y {perfdb.filter_height}'
+        exec_str += f' -x {perfdb.filter_width}'
+        if perfdb.filter_depth != def_val.filter_depth:
+            exec_str += f' --fil_d {perfdb.filter_depth}'
+        if perfdb.pad_width != def_val.pad_width:
+            exec_str += f' -p {perfdb.pad_width}'
+        if perfdb.pad_height != def_val.pad_height:
+            exec_str += f' -q {perfdb.pad_height}'
+        if perfdb.pad_depth != def_val.pad_depth:
+            exec_str += f' --pad_d {perfdb.pad_depth}'
+        if perfdb.step_width != def_val.step_width:
+            exec_str += f' -u {perfdb.step_width}'
+        if perfdb.step_height != def_val.step_height:
+            exec_str += f' -v {perfdb.step_height}'
+        if perfdb.step_depth != def_val.step_depth:
+            exec_str += f' --conv_stride_d {perfdb.step_depth}'
+        if perfdb.dilation_width != def_val.dilation_width:
+            exec_str += f' -l {perfdb.dilation_width}'
+        if perfdb.dilation_height != def_val.dilation_height:
+            exec_str += f' -j {perfdb.dilation_height}'
+        if perfdb.dilation_depth != def_val.dilation_depth:
+            exec_str += f' --dilation_d {perfdb.dilation_depth}'
+        if perfdb.groups != def_val.groups:
+            exec_str += f' -g {perfdb.groups}'
+        if perfdb.mode == 1:
+            exec_str += ' -m conv'
+        if perfdb.in_layout != def_val.in_layout:
+            if perfdb.dimension == 2:
+                if perfdb.in_layout == 1:
+                    pass
+                elif perfdb.in_layout == 2:
+                    exec_str += ' --in_layout NHWC'
+                    exec_str += ' --out_layout NHWC'
+                    exec_str += ' --fil_layout NHWC'
+                else:
+                    raise ValueError(f"Unsupported in_layout {perfdb.in_layout} for 2D convolution")
+            elif perfdb.dimension == 3:
+                if perfdb.in_layout == 1:
+                    pass
+                elif perfdb.in_layout == 2:
+                    exec_str += ' --in_layout NDHWC'
+                    exec_str += ' --out_layout NDHWC'
+                    exec_str += ' --fil_layout NDHWC'
+                else:
+                    raise ValueError(f"Unsupported in_layout {perfdb.in_layout} for 3D convolution")
+        exec_str += ' -t 1'
+        print(exec_str)
+
+def ParseROCmPerfDb(shape_str):
+    params = shape_str.split('|')
+
+    perfdb = PerfDbArgs(
+        mode = int(params[0]),
+        datatype = int(params[1]),
+        dimension = int(params[2]),
+        direction = int(params[3]),
+        in_batch = int(params[4]),
+        in_channel = int(params[5]),
+        in_width = int(params[6]),
+        in_height = int(params[7]),
+        in_depth = int(params[8]),
+        filter_width = int(params[9]),
+        filter_height = int(params[10]),
+        filter_depth = int(params[11]),
+        out_channel = int(params[12]),
+        pad_width = int(params[13]),
+        pad_height = int(params[14]),
+        pad_depth = int(params[15]),
+        step_width = int(params[16]),
+        step_height = int(params[17]),
+        step_depth = int(params[18]),
+        dilation_width = int(params[19]),
+        dilation_height = int(params[20]),
+        dilation_depth = int(params[21]),
+        groups = int(params[22]),
+        in_layout = int(params[23]),
+        filter_layout = int(params[24]),
+        out_layout = int(params[25]),
+        bias = int(params[26]),
+    )
+    PerfDbArgs.PrintMIOpen(perfdb)
+
 def Solve():
     global solver_map
     # Parse command name to determine data type
@@ -104,6 +253,8 @@ def Solve():
     parser.add_argument('--output', type=str, default='',
                         help='parameters output file')
     
+    parser.add_argument('--perf', type=str, default='',
+                        help='the shape of Rocm performance db')
     args = parser.parse_args()
 
     pd = shapeConvert.ProblemDescription()
@@ -145,6 +296,8 @@ def Solve():
             print(f"{solver_name:<50} {stats.execTime:<25.4f} {stats.gflops:<20.4f} "
                   f"{stats.support_count:<15} {stats.best_count:<15} "
                   f"{stats.average_gflops:<15.4f} {stats.execTime/stats.support_count:<15.4f}")
+    elif args.perf != '':
+        ParseROCmPerfDb(args.perf)
 
 if __name__ == "__main__":
     try:
