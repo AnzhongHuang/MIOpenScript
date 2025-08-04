@@ -1,5 +1,6 @@
 import re
 import sys
+import comm
 import matplotlib.pyplot as plt
 import csv
 from collections import defaultdict
@@ -17,22 +18,35 @@ def parse_miopen_log(log_path):
     with open(log_path, 'r') as file:
         content = file.read()
         
-    # Split the log file into individual test cases
-    test_cases = re.split(r'MIOpenDriver convfp16', content)
+    solution_str = r"Solution: (\S+)"
+    key_words = r'MIOpenDriver conv'
+    # find 'MIOpenDriver conv' in the log file
+    if 'MIOpenDriver conv' in content:
+        key_words = r'MIOpenDriver conv'
+    elif 'cuDNNDriver conv' in content:
+        key_words = r'cuDNNDriver conv'
+        solution_str = r"Algorithm: (\S+)"
+    else:
+        print(f"No valid MIOpen or cuDNN log found in {log_path}.")
+        return results
     
+    # Split the log file into individual test cases
+    test_cases = re.split(key_words, content)
+
     for test_case in test_cases[1:]:  # Skip the first empty element
         test_data = {}
         
         # Extract command
-        command = "MIOpenDriver convfp16" + test_case.split('\n')[0]
+        command = key_words + test_case.split('\n')[0]
         test_data['command'] = command
         
         # Extract solution
-        solution_match = re.search(r'Solution: (\S+)', test_case)
+        solution_match = re.search(solution_str, test_case)
         if solution_match:
             test_data['solution'] = solution_match.group(1)
         else:
             test_data['solution'] = "N/A"
+            print(f"No solution: {command}")
         
         # Extract elapsed time
         elapsed_match = re.search(r'Elapsed: (\d+\.\d+)', test_case)
