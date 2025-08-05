@@ -2,6 +2,87 @@ from dataclasses import dataclass, field
 from typing import Optional
 from enum import Enum
 
+# Mapping of flags to normalized names (both short and long forms)
+FLAG_MAPPING = {
+    # Operation type
+    '-F': 'forw', '--forw': 'forw',
+    # Input tensor
+    '-n': 'batchsize', '--batchsize': 'batchsize',
+    '-c': 'in_channels', '--in_channels': 'in_channels',
+    '-H': 'in_h', '--in_h': 'in_h',
+    '-W': 'in_w', '--in_w': 'in_w',
+    '-!': 'in_d', '--in_d': 'in_d',
+    # Output channels
+    '-k': 'out_channels', '--out_channels': 'out_channels',
+    # Kernel
+    '-y': 'fil_h', '--fil_h': 'fil_h',
+    '-x': 'fil_w', '--fil_w': 'fil_w',
+    '-@': 'fil_d', '--fil_d': 'fil_d',
+    # Padding
+    '-p': 'pad_h', '--pad_h': 'pad_h',
+    '-q': 'pad_w', '--pad_w': 'pad_w',
+    '-$': 'pad_d', '--pad_d': 'pad_d',
+    # Stride
+    '-u': 'conv_stride_h', '--conv_stride_h': 'conv_stride_h',
+    '-v': 'conv_stride_w', '--conv_stride_w': 'conv_stride_w',
+    '-#': 'conv_stride_d', '--conv_stride_d': 'conv_stride_d',
+    # Dilation
+    '-l': 'dilation_h', '--dilation_h': 'dilation_h',
+    '-j': 'dilation_w', '--dilation_w': 'dilation_w',
+    '-^': 'dilation_d', '--dilation_d': 'dilation_d',
+    # Groups
+    '-g': 'group_count', '--group_count': 'group_count',
+    # Spatial dimension
+    '-_': 'spatial_dim', '--spatial_dim': 'spatial_dim',
+    # Solver and data type
+    '-S': 'solution', '--solution': 'solution',
+    '-t': 'time', '--time': 'time',
+    '-V': 'verify', '--verify': 'verify',
+    '-m': 'mode', '--mode': 'mode',
+    # Data loading
+    '-d': 'in_data', '--in_data': 'in_data',
+    '-e': 'weights', '--weights': 'weights',
+    '-D': 'dout_data', '--dout_data': 'dout_data',
+    # Bias
+    '-b': 'bias', '--bias': 'bias',
+    '-a': 'in_bias', '--in_bias': 'in_bias',
+    # Additional parameters
+    '-i': 'iter', '--iter': 'iter',
+    '-z': 'pad_mode', '--pad_mode': 'pad_mode',
+    '-f': 'fil_layout', '--fil_layout': 'fil_layout',
+    '-I': 'in_layout', '--in_layout': 'in_layout',
+    '-O': 'out_layout', '--out_layout': 'out_layout',
+    '-~': 'gpubuffer_check', '--gpubuffer_check': 'gpubuffer_check',
+    '-w': 'wall', '--wall': 'wall',
+    '-P': 'printconv', '--printconv': 'printconv',
+    '-r': 'pad_val', '--pad_val': 'pad_val',
+    '-o': 'dump_output', '--dump_output': 'dump_output',
+    '-s': 'search', '--search': 'search',
+    '-C': 'verification_cache', '--verification_cache': 'verification_cache',
+    # Shape format
+    '--shapeformat': 'shapeformat',
+    '--trace': 'trace',
+    '--event': 'event',
+    '--gpu': 'gpu',
+    '--dbshape': 'dbshape',
+    '--warmup': 'warmup'
+}
+
+CONVERTERS = {
+    'forw': int, 'batchsize': int, 'in_channels': int, 'in_h': int, 'in_w': int,
+    'in_d': int, 'out_channels': int, 'fil_h': int, 'fil_w': int, 'fil_d': int,
+    'pad_h': int, 'pad_w': int, 'pad_d': int, 'conv_stride_h': int, 'conv_stride_w': int,
+    'conv_stride_d': int, 'dilation_h': int, 'dilation_w': int, 'dilation_d': int,
+    'group_count': int, 'spatial_dim': int, 'solution': int, 'time': int, 'verify': int,
+    'bias': int, 'iter': int, 'gpubuffer_check': int, 'wall': int, 'printconv': int,
+    'pad_val': int, 'dump_output': int, 'search': int,
+    # Strings (keep as-is)
+    'mode': str, 'in_data': str, 'weights': str, 'dout_data': str, 'in_bias': str,
+    'pad_mode': str, 'fil_layout': str, 'in_layout': str, 'out_layout': str,
+    'verification_cache': str, 'shapeformat': str, 'trace': str, 'event': str,
+    'gpu': int, 'dbshape': int, 'warmup': int
+}
+
 class MiopenDataType(Enum):
     miopenHalf = 0  # 16-bit floating point (Fully supported)
     miopenFloat = 1  # 32-bit floating point (Fully supported)
@@ -86,9 +167,151 @@ class MIArgs:
     # private fields
     trace: str = ''
     event: str = ''
-    warmup: int = 5
+    warmup: int = 3
     gpu: int = 0
     dbshape: int = 0
 
     in_data_type: MiopenDataType = MiopenDataType.miopenHalf
     shapeformat: str = 'vs'
+
+    @staticmethod
+    def ParseParam(args_list):
+        command_name = args_list[0] if len(args_list) > 1 else "conv"
+        if "bfp16" in command_name.lower():
+            in_data_type = MiopenDataType.miopenBFloat16
+        elif "fp16" in command_name.lower():
+            in_data_type = MiopenDataType.miopenHalf
+        elif "int8" in command_name.lower():
+            in_data_type = MiopenDataType.miopenInt8
+        elif "conv" == command_name.lower():
+            in_data_type = MiopenDataType.miopenFloat
+        elif "fp64" in command_name.lower():
+            in_data_type = MiopenDataType.miopenDouble
+        else:
+            print(f"Unknown {command_name} in command name: {args_list}")
+
+        args={}
+        idx = 1
+
+        # default value
+        args['in_d']=1
+        args['fil_d']=1
+        args['pad_h']=0
+        args['pad_w'] = 0
+        args['pad_d'] = 0
+        args['conv_stride_h'] = 1
+        args['conv_stride_w'] = 1
+        args['conv_stride_d'] = 0
+        args['dilation_h'] = 1
+        args['dilation_w'] = 1
+        args['dilation_d'] = 0
+        args['group_count'] = 1
+        args['spatial_dim'] = 2
+        args['solution'] = -1
+        args['time'] = 0
+        args['verify'] = 1
+        args['mode'] = 'conv'
+        args['in_data'] = ''
+        args['weights'] = ''
+        args['dout_data'] = ''
+        args['bias'] = 0
+        args['in_bias'] = ''
+        args['iter'] = 10
+        args['pad_mode'] = 'default'
+        args['fil_layout'] = None
+        args['in_layout'] = None
+        args['out_layout'] = None
+        args['gpubuffer_check'] = 0
+        args['wall'] = 0
+        args['printconv'] = 1
+        args['pad_val'] = 0
+        args['dump_output'] = 0
+        args['search'] = 0
+        args['verification_cache'] = ''
+        args['shapeformat'] = 'solver'  # default shape format
+        args['trace'] = ''
+        args['event'] = ''
+        args['gpu'] = 0
+        args['dbshape'] = 0
+        args['warmup'] = 3
+
+        while idx < len(args_list):
+            if args_list[idx].startswith('-'):
+                key = args_list[idx]
+                value = args_list[idx + 1]
+
+                norm_name = FLAG_MAPPING.get(key)
+                convert = CONVERTERS.get(norm_name, str)
+                args[norm_name] = convert(value)
+                idx += 1
+
+            idx += 1
+
+        if args['in_layout'] == None:
+            if args['spatial_dim'] == 2:
+                args['in_layout'] = 'NCHW'
+            else:
+                args['in_layout'] = 'NCDHW'
+        if args['fil_layout'] == None:
+            args['fil_layout'] = args['in_layout']
+        if args['out_layout'] == None:
+            args['out_layout'] = args['in_layout']
+
+        if 'forw' not in args:
+            print(args_list)
+
+        miargs = MIArgs(
+            forw=args["forw"],
+            batchsize=args["batchsize"],
+            in_channels=args["in_channels"],
+            in_h=args["in_h"],
+            in_w=args["in_w"],
+            in_d=args["in_d"],
+            out_channels=args["out_channels"],
+            fil_h=args["fil_h"],
+            fil_w=args["fil_w"],
+            fil_d=args["fil_d"],
+            pad_h=args["pad_h"],
+            pad_w=args["pad_w"],
+            pad_d=args["pad_d"],
+            conv_stride_h=args["conv_stride_h"],
+            conv_stride_w=args["conv_stride_w"],
+            conv_stride_d=args["conv_stride_d"],
+            dilation_h=args["dilation_h"],
+            dilation_w=args["dilation_w"],
+            dilation_d=args["dilation_d"],
+            group_count=args["group_count"],
+            spatial_dim=args["spatial_dim"],
+            solution=args["solution"],
+            time=args["time"],
+            verify=args["verify"],
+            mode=args["mode"],
+            in_data=args["in_data"],
+            weights=args["weights"],
+            dout_data=args["dout_data"],
+            bias=args["bias"],
+            in_bias=args["in_bias"],
+            iter=args["iter"],
+            pad_mode=args["pad_mode"],
+            fil_layout=args["fil_layout"],
+            in_layout=args["in_layout"],
+            out_layout=args["out_layout"],
+            gpubuffer_check=args["gpubuffer_check"],
+            wall=args["wall"],
+            printconv=args["printconv"],
+            pad_val=args["pad_val"],
+            dump_output=args["dump_output"],
+            search=args["search"],
+            verification_cache=args["verification_cache"],
+
+            # private fields
+            shapeformat=args["shapeformat"],
+            trace=args["trace"],
+            event=args["event"],
+            gpu=args["gpu"],
+            dbshape=args["dbshape"],
+            warmup=args["warmup"],
+            in_data_type=in_data_type
+        )
+
+        return miargs
