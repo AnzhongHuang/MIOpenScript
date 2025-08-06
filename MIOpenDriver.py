@@ -290,6 +290,7 @@ def RunConv(device, args, in_data_type, gpu_idx):
                     result = run_convolution(forw)
                 end_event[0].record()
                 stream.synchronize()
+            elapsed_time_ms = start_event[0].elapsed_time(end_event[0])
 
         else:
             # CPU time measurement

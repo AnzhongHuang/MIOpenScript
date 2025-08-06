@@ -59,6 +59,7 @@ FLAG_MAPPING = {
     '-o': 'dump_output', '--dump_output': 'dump_output',
     '-s': 'search', '--search': 'search',
     '-C': 'verification_cache', '--verification_cache': 'verification_cache',
+    '-G': 'gpualloc', '--gpualloc': 'gpualloc',
     # Shape format
     '--shapeformat': 'shapeformat',
     '--trace': 'trace',
@@ -81,7 +82,7 @@ CONVERTERS = {
     'mode': str, 'in_data': str, 'weights': str, 'dout_data': str, 'in_bias': str,
     'pad_mode': str, 'fil_layout': str, 'in_layout': str, 'out_layout': str,
     'verification_cache': str, 'shapeformat': str, 'trace': str, 'event': str,
-    'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int
+    'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int, 'gpualloc': int
 }
 
 class MiopenDataType(Enum):
@@ -164,6 +165,7 @@ class MIArgs:
     dump_output: int = 0
     search: int = 0
     verification_cache: str = ''
+    gpualloc: int = 0  # GPU allocation mode, 0 for default, 1 for specific GPU
 
     # private fields
     trace: str = ''
@@ -230,6 +232,7 @@ class MIArgs:
         args['dump_output'] = 0
         args['search'] = 0
         args['verification_cache'] = ''
+        args['gpualloc'] = 0  # GPU allocation mode, 0 for default, 1 for specific GPU
         args['shapeformat'] = 'solver'  # default shape format
         args['trace'] = ''
         args['event'] = ''
@@ -306,6 +309,7 @@ class MIArgs:
             dump_output=args["dump_output"],
             search=args["search"],
             verification_cache=args["verification_cache"],
+            gpualloc=args["gpualloc"],
 
             # private fields
             shapeformat=args["shapeformat"],
