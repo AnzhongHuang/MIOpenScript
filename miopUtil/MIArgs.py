@@ -65,7 +65,8 @@ FLAG_MAPPING = {
     '--event': 'event',
     '--gpu': 'gpu',
     '--dbshape': 'dbshape',
-    '--warmup': 'warmup'
+    '--warmup': 'warmup',
+    '--cpu' : 'cpu'
 }
 
 CONVERTERS = {
@@ -80,7 +81,7 @@ CONVERTERS = {
     'mode': str, 'in_data': str, 'weights': str, 'dout_data': str, 'in_bias': str,
     'pad_mode': str, 'fil_layout': str, 'in_layout': str, 'out_layout': str,
     'verification_cache': str, 'shapeformat': str, 'trace': str, 'event': str,
-    'gpu': int, 'dbshape': int, 'warmup': int
+    'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int
 }
 
 class MiopenDataType(Enum):
@@ -170,6 +171,7 @@ class MIArgs:
     warmup: int = 3
     gpu: int = 0
     dbshape: int = 0
+    cpu: int = 0 # 1 use CPU for verification
 
     in_data_type: MiopenDataType = MiopenDataType.miopenHalf
     shapeformat: str = 'vs'
@@ -234,6 +236,7 @@ class MIArgs:
         args['gpu'] = 0
         args['dbshape'] = 0
         args['warmup'] = 3
+        args['cpu'] = 0  # Use CPU for verification
 
         while idx < len(args_list):
             if args_list[idx].startswith('-'):
@@ -311,6 +314,7 @@ class MIArgs:
             gpu=args["gpu"],
             dbshape=args["dbshape"],
             warmup=args["warmup"],
+            cpu=args["cpu"],
             in_data_type=in_data_type
         )
 

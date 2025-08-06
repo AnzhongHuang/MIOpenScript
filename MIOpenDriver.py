@@ -55,7 +55,8 @@ def RunConv(device, args, in_data_type, gpu_idx):
         problem.test()
 
     # which device to use
-    torch.cuda.set_device(device)
+    if device.type == 'cuda':
+        torch.cuda.set_device(device)
 
     # soluion works only without user db
     if args.solution >= 0:
@@ -231,11 +232,13 @@ def RunConv(device, args, in_data_type, gpu_idx):
 
     if args.search:
         torch.backends.cudnn.benchmark=True
-    stream=torch.cuda.Stream(device=device)
-    with torch.cuda.stream(stream):
-        if args.warmup > 0:
-            for _ in range(args.warmup):
-                result = run_convolution(forw)
+    if device.type == 'cuda':
+        stream=torch.cuda.Stream(device=device)
+        with torch.cuda.stream(stream):
+            if args.warmup > 0:
+                for _ in range(args.warmup):
+                    result = run_convolution(forw)
+
     # Configure profiler if trace is requested
     if args.trace or args.event:
         prefix = args.trace.split(".")[0]
@@ -280,18 +283,22 @@ def RunConv(device, args, in_data_type, gpu_idx):
         end_event =   [torch.cuda.Event(enable_timing=True) for _ in range(args.iter)]
 
         elapsed_time_ms = 0
-        # stream=torch.cuda.Stream(device=device)
-        with torch.cuda.stream(stream):
-            start_event[0].record()
+        if device.type == 'cuda':
+            with torch.cuda.stream(stream):
+                start_event[0].record()
+                for _ in range(args.iter):
+                    result = run_convolution(forw)
+                end_event[0].record()
+                stream.synchronize()
+
+        else:
+            # CPU time measurement
+            start_time = time.time()
+            args.iter = 1
             for _ in range(args.iter):
-
                 result = run_convolution(forw)
-            end_event[0].record()
-
-        stream.synchronize()
-
-        t = start_event[0].elapsed_time(end_event[0])
-        elapsed_time_ms += t
+            end_time = time.time()
+            elapsed_time_ms = (end_time - start_time) * 1000
 
         # The elapsed time is bigger than kernel execution time
         print(f"GPU {gpu_idx} - execution time: {elapsed_time_ms/(args.iter):.4f} ms")
@@ -323,8 +330,12 @@ def ParseRunList(file_path):
 
 def Solve():
     # Set device
-    num_gpus = torch.cuda.device_count()
-    devices = [torch.device(f'cuda:{i}') for i in range(num_gpus)]
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        devices = [torch.device(f'cuda:{i}') for i in range(num_gpus)]
+    else:
+        num_gpus = 20
+        devices = [torch.device('cpu')  for i in range(num_gpus)]
 
     fileInput = "--input" in sys.argv[1]
     if fileInput:
@@ -349,8 +360,11 @@ def Solve():
     else:
         # Parse command name to determine data type
         args = MIArgs.ParseParam(sys.argv[1:])
-
-        RunConv(devices[args.gpu], args, args.in_data_type, args.gpu)
+        if args.cpu == 1:
+            dev = torch.device('cpu')
+        else:
+            dev = devices[args.gpu] if args.gpu < num_gpus else devices[0]
+        RunConv(dev, args, args.in_data_type, args.gpu)
 
 def main():
     start_time = time.time()
