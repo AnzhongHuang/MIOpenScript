@@ -23,11 +23,17 @@ def safe_print(*args, **kwargs):
     with print_lock:
         print(*args, **kwargs)
 
-def generate_fixed_seed_input(shape, dtype, device, seed=42):
-    # Create separate generator with fixed seed
-    gen = torch.Generator(device=device).manual_seed(seed)
-    input_data = (2 * torch.rand(shape, dtype=dtype, device=device, generator=gen) - 1)
-    input_data.requires_grad_(True)
+def generate_fixed_seed_input(shape, dtype, device, verify=False):
+
+    if verify:
+        torch.manual_seed(42)
+        # Create separate generator with fixed seed
+        input_data = (2 * torch.randn(shape, dtype=dtype, device="cpu", requires_grad=True) - 1)
+        if device.type == 'cuda':
+            input_data = input_data.to(device)
+    else:
+        # Use the default random generator
+        input_data = torch.randn(shape, dtype=dtype, device=device, requires_grad=True)
     return input_data
 
 def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
@@ -104,7 +110,7 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
             return torch.tensor(data.reshape(shape), dtype=dtype, device=device, requires_grad=True)
         else:
             # Create random tensor
-            input_data = generate_fixed_seed_input(shape, dtype, device)
+            input_data = generate_fixed_seed_input(shape, dtype, device, verify=args.verify)
             return input_data
 
 
@@ -321,19 +327,19 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
             end_time = time.time()
             elapsed_time_ms = (end_time - start_time) * 1000
 
-        if (args.verify and False):
+        if (args.verify):
             status = DataHash.summarize_conv_output(result, include_histogram=False, bins=6)
             # print(f"Convolution result shape: {result.shape}")
             # print(f"Convolution status: {status}")
 
             golden_stats = DataHash.load_golden_stats("conv_output_stats.json")
+            tolerance = 0.05
             if golden_stats:
-                res, max_error, channel_errors = DataHash.compare_stats(golden_stats, status, tolerance=0.05)
-                print(f"Max error: {max_error}")
+                res, max_error, channel_errors = DataHash.compare_stats(golden_stats, status, tolerance=tolerance)
                 if res:
-                    print("Statistics match the golden values within tolerance.")
+                    print(f"Conv Verify OK: ({max_error} < {tolerance})")
                 else:
-                    print("Statistics do not match the golden values within tolerance.")
+                    print(f"Conv Verify FAILED: {max_error} >= {tolerance}")
             DataHash.save_golden_stats(status, "conv_output_stats.json")
 
         # The elapsed time is bigger than kernel execution time

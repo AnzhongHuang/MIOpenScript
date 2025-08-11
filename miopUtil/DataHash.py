@@ -7,10 +7,16 @@ def summarize_conv_output(tensor, include_histogram=False, bins=10):
     """Extract per-channel statistics from convolution output tensor"""
     # Determine channel dimension based on tensor shape
     channel_dim = 0 if tensor.dim() == 4 and tensor.size(0) < 16 else 1
-    
+    print(f" stride: {tensor.stride()}, size: {tensor.size()}, dim: {tensor.dim()}, channel_dim: {channel_dim}, shape: {tensor.shape} ")
+    print(f" tensor type: {tensor.dtype}, device: {tensor.device} ")
     # Move channel dimension to front and flatten
     tensor = tensor.movedim(channel_dim, 0)
     flat_tensor = tensor.reshape(tensor.size(0), -1)
+    print(tensor)
+    # print to file
+    torch.set_printoptions(profile="full")
+    with open('tensor_output_gpu.txt', 'w') as f:
+        print(tensor, file=f)
     
     stats = []
     for i in range(flat_tensor.size(0)):
