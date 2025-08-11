@@ -222,7 +222,7 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
                     padding=conv_args['padding'],
                     dilation=conv_args['dilation'],
                     transposed=False,
-                    output_padding=(0, 0),
+                    output_padding= (0, 0, 0) if is_3d else (0, 0),
                     groups=conv_args['groups'],
                     output_mask=output_mask
                 )
@@ -240,7 +240,7 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
                     padding=conv_args['padding'],
                     dilation=conv_args['dilation'],
                     transposed=False,
-                    output_padding=(0, 0),
+                    output_padding=(0, 0, 0) if is_3d else (0, 0),
                     groups=conv_args['groups'],
                     output_mask=output_mask
                 )
@@ -376,7 +376,7 @@ def Solve():
     fileInput = "--input" in sys.argv[1]
     if fileInput:
         convRunList = ParseRunList(sys.argv[2])
-
+        print(f"Parsed {len(convRunList)} commands from input file.")
         #for args, in_data_type in (convRunList):
         #    RunConv(devices[args.gpu], args, in_data_type)
         #parser.add_argument('--input', type=str, help='Input file containing command lines')
