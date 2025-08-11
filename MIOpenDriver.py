@@ -272,13 +272,15 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
                 print("Warning: Current can't support Golden for conv_forward !!!")
             elif operation == 2:
                 print(f"input_shape : {input_shape}")
-                grad_input = MIOpenDriver_Ref.conv_backward_data(grad_output=grad_output,
+                grad_input = MIOpenDriver_Ref.conv_backward_data(
+                    grad_output=grad_output,
                     weight=weight,
                     input_shape=input_shape,
                     padding=conv_args['padding'][0],
                     stride=conv_args['stride'][0],
                     dilation=conv_args['dilation'][0],
-                    solution_id=6
+                    group=conv_args['groups'],
+                    solution_id=86
                 )
                 return grad_input
             elif operation == 4:
