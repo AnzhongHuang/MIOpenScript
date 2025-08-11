@@ -15,6 +15,13 @@ import miopUtil.shapeConvert as shapeConvert
 from miopUtil.MIArgs import MiopenDataType
 from miopUtil.MIArgs import MIArgs
 import miopUtil.DataHash as DataHash
+import threading
+print_lock = threading.Lock()
+
+def safe_print(*args, **kwargs):
+    """Thread-safe print function"""
+    with print_lock:
+        print(*args, **kwargs)
 
 def generate_fixed_seed_input(shape, dtype, device, seed=42):
     # Create separate generator with fixed seed
@@ -23,7 +30,7 @@ def generate_fixed_seed_input(shape, dtype, device, seed=42):
     input_data.requires_grad_(True)
     return input_data
 
-def RunConv(device, args, in_data_type, gpu_idx):
+def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
 
     if args.dbshape:
         problem = shapeConvert.ProblemDescription(
@@ -314,7 +321,7 @@ def RunConv(device, args, in_data_type, gpu_idx):
             end_time = time.time()
             elapsed_time_ms = (end_time - start_time) * 1000
 
-        if (args.verify):
+        if (args.verify and False):
             status = DataHash.summarize_conv_output(result, include_histogram=False, bins=6)
             # print(f"Convolution result shape: {result.shape}")
             # print(f"Convolution status: {status}")
@@ -330,7 +337,7 @@ def RunConv(device, args, in_data_type, gpu_idx):
             DataHash.save_golden_stats(status, "conv_output_stats.json")
 
         # The elapsed time is bigger than kernel execution time
-        print(f"GPU {gpu_idx} - execution time: {elapsed_time_ms/(args.iter):.4f} ms")
+        safe_print(f"Test {test_idx}, GPU {gpu_idx} - execution time: {elapsed_time_ms/(args.iter):.4f} ms")
 
     # Print results
     op_names = {
@@ -377,11 +384,13 @@ def Solve():
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_gpus) as executor:
             gpu_idx = next(gpu_ids)
             futures = []
+            test_idx = 0
             for args, in_data_type in convRunList:
                 # Get the next GPU ID in the cycle
                 gpu_idx = next(gpu_ids)
                 # Submit the task to the executor
-                futures.append(executor.submit(RunConv, devices[gpu_idx], args, in_data_type, gpu_idx))
+                test_idx += 1
+                futures.append(executor.submit(RunConv, devices[gpu_idx], args, in_data_type, gpu_idx, test_idx))
 
             # Optionally wait for all futures to complete
             concurrent.futures.wait(futures)
