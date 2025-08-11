@@ -14,6 +14,14 @@ from enum import Enum
 import miopUtil.shapeConvert as shapeConvert
 from miopUtil.MIArgs import MiopenDataType
 from miopUtil.MIArgs import MIArgs
+import miopUtil.DataHash as DataHash
+
+def generate_fixed_seed_input(shape, dtype, device, seed=42):
+    # Create separate generator with fixed seed
+    gen = torch.Generator(device=device).manual_seed(seed)
+    input_data = (2 * torch.rand(shape, dtype=dtype, device=device, generator=gen) - 1)
+    input_data.requires_grad_(True)
+    return input_data
 
 def RunConv(device, args, in_data_type, gpu_idx):
 
@@ -89,7 +97,9 @@ def RunConv(device, args, in_data_type, gpu_idx):
             return torch.tensor(data.reshape(shape), dtype=dtype, device=device, requires_grad=True)
         else:
             # Create random tensor
-            return torch.randn(shape, dtype=dtype, device=device, requires_grad=True)
+            input_data = generate_fixed_seed_input(shape, dtype, device)
+            return input_data
+
 
     # Calculate output dimensions
     def calc_output_size(in_size, pad, kernel, stride, dilation=1):
@@ -190,7 +200,9 @@ def RunConv(device, args, in_data_type, gpu_idx):
             }
 
             if operation == 1:  # Forward convolution
-                return conv_fn(input_tensor, weight, bias, **conv_args)
+                result = conv_fn(input_tensor, weight, bias, **conv_args)
+
+                return result
 
             elif operation == 2:  # Backward data
                 output_mask = [True, False, False]
@@ -283,6 +295,7 @@ def RunConv(device, args, in_data_type, gpu_idx):
         end_event =   [torch.cuda.Event(enable_timing=True) for _ in range(args.iter)]
 
         elapsed_time_ms = 0
+        result = None
         if device.type == 'cuda':
             with torch.cuda.stream(stream):
                 start_event[0].record()
@@ -300,6 +313,21 @@ def RunConv(device, args, in_data_type, gpu_idx):
                 result = run_convolution(forw)
             end_time = time.time()
             elapsed_time_ms = (end_time - start_time) * 1000
+
+        if (args.verify):
+            status = DataHash.summarize_conv_output(result, include_histogram=False, bins=6)
+            # print(f"Convolution result shape: {result.shape}")
+            # print(f"Convolution status: {status}")
+
+            golden_stats = DataHash.load_golden_stats("conv_output_stats.json")
+            if golden_stats:
+                res, max_error, channel_errors = DataHash.compare_stats(golden_stats, status, tolerance=0.05)
+                print(f"Max error: {max_error}")
+                if res:
+                    print("Statistics match the golden values within tolerance.")
+                else:
+                    print("Statistics do not match the golden values within tolerance.")
+            DataHash.save_golden_stats(status, "conv_output_stats.json")
 
         # The elapsed time is bigger than kernel execution time
         print(f"GPU {gpu_idx} - execution time: {elapsed_time_ms/(args.iter):.4f} ms")
