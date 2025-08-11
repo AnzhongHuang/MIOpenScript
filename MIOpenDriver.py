@@ -14,6 +14,7 @@ from enum import Enum
 import miopUtil.shapeConvert as shapeConvert
 from miopUtil.MIArgs import MiopenDataType
 from miopUtil.MIArgs import MIArgs
+import MIOpenDriver_Ref
 import miopUtil.DataHash as DataHash
 import threading
 print_lock = threading.Lock()
@@ -101,6 +102,7 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
     is_3d = args.spatial_dim == 3
     conv_fn = F.conv3d if is_3d else F.conv2d
     tensor_dim = 5 if is_3d else 4
+    print(f"is_3d: {is_3d}")
     
     # Create tensors with requires_grad=True for gradient computation
     def create_tensor(shape, filename=""):
@@ -137,6 +139,8 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
         weight_shape = (args.out_channels, in_channels_per_group, args.fil_d, args.fil_h, args.fil_w)
     else:
         weight_shape = (args.out_channels, in_channels_per_group, args.fil_h, args.fil_w)
+
+    print(f"in_channels_per_group: {in_channels_per_group}, in_channels: {args.in_channels}, group_count: {args.group_count}")
     
     weight = create_tensor(weight_shape, args.weights)
     
@@ -249,14 +253,47 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
                     groups=conv_args['groups'],
                     output_mask=output_mask
                 )
-
                 return grad_weight
+
+    # gpu golden for convolution operations
+    def run_convolution_ref(operation):
+        with record_function(f"convolution_ref_{operation}"):
+            conv_args = {
+                    'stride': (args.conv_stride_d, args.conv_stride_h, args.conv_stride_w) if is_3d else 
+                            (args.conv_stride_h, args.conv_stride_w),
+                    'padding': (args.pad_d, args.pad_h, args.pad_w) if is_3d else 
+                            (args.pad_h, args.pad_w),
+                    'dilation': (args.dilation_d, args.dilation_h, args.dilation_w) if is_3d else 
+                            (args.dilation_h, args.dilation_w),
+                    'groups': args.group_count
+                }
+            
+            if operation == 1:
+                print("Warning: Current can't support Golden for conv_forward !!!")
+            elif operation == 2:
+                print(f"input_shape : {input_shape}")
+                grad_input = MIOpenDriver_Ref.conv_backward_data(grad_output=grad_output,
+                    weight=weight,
+                    input_shape=input_shape,
+                    padding=conv_args['padding'][0],
+                    stride=conv_args['stride'][0],
+                    dilation=conv_args['dilation'][0],
+                    solution_id=6
+                )
+                return grad_input
+            elif operation == 4:
+                print("Warning: Current can't support Golden for conv_back_weight !!!")
+
+        
 
     forw = args.forw
 
+    print("Log_0")
     if args.search:
+        print("Log_1")
         torch.backends.cudnn.benchmark=True
     if device.type == 'cuda':
+        print("Log_2")
         stream=torch.cuda.Stream(device=device)
         with torch.cuda.stream(stream):
             if args.warmup > 0:
@@ -265,6 +302,7 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
 
     # Configure profiler if trace is requested
     if args.trace or args.event:
+        print("Log_3")
         prefix = args.trace.split(".")[0]
         trace_path = f"{prefix}_{trace_name}.json"
         trace_path = os.path.abspath(trace_path)
@@ -315,6 +353,32 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
                     result = run_convolution(forw)
                 end_event[0].record()
                 stream.synchronize()
+                
+                # compare gpu result with golden
+                golden_result = run_convolution_ref(forw)
+                # Only compare if both results are available
+                if golden_result is not None and result is not None:
+                    try:
+                        if result is not None:
+                            result = result.float()
+                            
+                        print(f"gpu type: {type(result)}, cpu type: {type(golden_result)}")
+                        
+                        is_close = torch.allclose(result, golden_result, rtol=1e-3, atol=1e-3)
+                        print(f"Success!!! <Results match with golden reference: {is_close}>")
+                        
+                        if not is_close:
+                            diff = torch.abs(result - golden_result)
+                            max_diff = torch.max(diff).item()
+                            mean_diff = torch.mean(diff).item()
+                            print(f"Max difference: {max_diff:.8f}")
+                            print(f"Mean difference: {mean_diff:.8f}")
+                    except Exception as e:
+                        print(f"Error comparing results: {e}")
+                else:
+                    print("Skipping golden comparison (reference result not available)")
+                
+                
             elapsed_time_ms = start_event[0].elapsed_time(end_event[0])
 
         else:
@@ -350,6 +414,7 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
         2: "BWD Data",
         4: "BWD Weight"
     }
+    print(f"op_names[forw]:{op_names[forw]}")
     operations_str = ", ".join(op_names[forw])
 
 def ParseRunList(file_path):
