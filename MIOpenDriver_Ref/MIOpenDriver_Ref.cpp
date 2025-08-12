@@ -13,18 +13,19 @@
 
 namespace py = pybind11;
 
-torch::Tensor conv_backward_data(
+torch::Tensor gpu_convolution_reference(
     torch::Tensor grad_output,
     torch::Tensor weight,
     std::vector<int64_t> input_shape,
-    int padding,
-    int stride,
-    int dilation,
-    int group,
-    int64_t solution_id)
+    int64_t padding,
+    int64_t stride,
+    int64_t dilation,
+    int64_t group,
+    int64_t solution_id,
+    int64_t operation)
 {
 
-    printf("\nLog_0: Starting conv_backward_data\n");
+    printf("\nLog_0: Starting gpu_convolution_reference\n");
 
     // Validate inputs
     if (grad_output.dim() != 4 || weight.dim() != 4)
@@ -180,26 +181,67 @@ torch::Tensor conv_backward_data(
         printf("\nLog_9.5: About to call miopenConvolutionBackwardDataImmediate\n");
 
         // Call MIOpen backward data convolution with proper error checking
-        status = miopenConvolutionBackwardDataImmediate(
-            handle,
-            grad_output_desc, grad_output_contiguous.data_ptr<float>(),
-            weight_desc, weight_contiguous.data_ptr<float>(),
-            conv_desc,
-            grad_input_desc, grad_input_contiguous.data_ptr<float>(),
-            workspace, workspace_size, 86);
 
-        printf("\nLog_10: miopenConvolutionBackwardDataImmediate returned with status: %d\n", status);
+        if (operation == 1)
+        {
+            status = miopenConvolutionForwardImmediate(
+                handle,
+                weight_desc, weight_contiguous.data_ptr<float>(),
+                grad_input_desc, grad_input_contiguous.data_ptr<float>(),
+                conv_desc,
+                grad_output_desc, grad_output_contiguous.data_ptr<float>(),
+                workspace, workspace_size, 85);
+
+            printf("\nLog_10: miopenConvolutionForwardImmediate returned with status: %d\n", status);
+            if (status != miopenStatusSuccess)
+            {
+                printf("MIOpen error status: %d\n", status);
+                throw std::runtime_error("MIOpen forward convolution failed with status: " + std::to_string(status));
+            }
+        }
+        else if (operation == 2)
+        {
+            status = miopenConvolutionBackwardDataImmediate(
+                handle,
+                grad_output_desc, grad_output_contiguous.data_ptr<float>(),
+                weight_desc, weight_contiguous.data_ptr<float>(),
+                conv_desc,
+                grad_input_desc, grad_input_contiguous.data_ptr<float>(),
+                workspace, workspace_size, 86);
+
+            printf("\nLog_10: miopenConvolutionBackwardDataImmediate returned with status: %d\n", status);
+            if (status != miopenStatusSuccess)
+            {
+                printf("MIOpen error status: %d\n", status);
+                throw std::runtime_error("MIOpen backward data convolution failed with status: " + std::to_string(status));
+            }
+        }
+        else if (operation == 4)
+        {
+            status = miopenConvolutionBackwardWeightsImmediate(
+                handle,
+                grad_output_desc, grad_output_contiguous.data_ptr<float>(),
+                grad_input_desc, grad_input_contiguous.data_ptr<float>(),
+                conv_desc,
+                weight_desc, weight_contiguous.data_ptr<float>(),
+                workspace, workspace_size, 87);
+
+            printf("\nLog_10: miopenConvolutionBackwardWeightsImmediate returned with status: %d\n", status);
+            if (status != miopenStatusSuccess)
+            {
+                printf("MIOpen error status: %d\n", status);
+                throw std::runtime_error("MIOpen backward weights convolution failed with status: " + std::to_string(status));
+            }
+        }
+        else
+        {
+            throw std::runtime_error("The Operation is set error[Forward-0 / BackwardData-2 / BackwardWeight-4]");
+        }
 
         // Clean up workspace
         if (workspace)
         {
             hipFree(workspace);
-        }
-
-        if (status != miopenStatusSuccess)
-        {
-            printf("MIOpen error status: %d\n", status);
-            throw std::runtime_error("MIOpen backward data convolution failed with status: " + std::to_string(status));
         }
 
         // Cleanup descriptors
@@ -213,7 +255,20 @@ torch::Tensor conv_backward_data(
         miopenDestroy(handle);
         printf("\nLog_12: Handle destroyed\n");
 
-        return grad_input_contiguous;
+        if (operation == 1)
+        {
+            return grad_output_contiguous;
+        }
+        else if (operation == 2)
+        {
+            return grad_input_contiguous;
+        }
+        else if (operation == 4)
+        {
+            return weight_contiguous;
+        }
+
+        return torch::Tensor{};
     }
     catch (...)
     {
@@ -236,8 +291,8 @@ PYBIND11_MODULE(MIOpenDriver_Ref, m)
 {
     m.doc() = "MIOpen convolution backward data operations";
 
-    m.def("conv_backward_data", &conv_backward_data,
-          "Perform convolution backward data operation using MIOpen",
+    m.def("gpu_convolution_reference", &gpu_convolution_reference,
+          "Perform convolution reference operation using MIOpen",
           py::arg("grad_output"),
           py::arg("weight"),
           py::arg("input_shape"),
@@ -245,7 +300,8 @@ PYBIND11_MODULE(MIOpenDriver_Ref, m)
           py::arg("stride"),
           py::arg("dilation"),
           py::arg("group"),
-          py::arg("solution_id"));
+          py::arg("solution_id"),
+          py::arg("operation"));
 
     m.def("get_miopen_version", &get_miopen_version,
           "Get MIOpen library version");
