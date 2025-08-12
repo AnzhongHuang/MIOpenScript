@@ -10,119 +10,108 @@
 #include <pybind11/stl.h>
 #include <vector>
 #include <stdexcept>
+#include <c10/util/Half.h>
+#include <c10/util/BFloat16.h>
+
+#define LOG_ENABLE 0
 
 namespace py = pybind11;
 
 torch::Tensor gpu_convolution_reference(
-    torch::Tensor grad_output,
+    torch::Tensor output,
     torch::Tensor weight,
-    std::vector<int64_t> input_shape,
+    torch::Tensor input,
     int64_t padding,
     int64_t stride,
     int64_t dilation,
     int64_t group,
     int64_t solution_id,
-    int64_t operation)
+    int64_t operation,
+    std::string type)
 {
-
-    printf("\nLog_0: Starting gpu_convolution_reference\n");
-
     // Validate inputs
-    if (grad_output.dim() != 4 || weight.dim() != 4)
+    if (output.dim() != 4 || weight.dim() != 4 || input.dim() != 4)
     {
-        throw std::invalid_argument("Expected 4D tensors for grad_output and weight");
+        throw std::invalid_argument("Expected 4D tensors for output / weight / input");
     }
-    printf("\nLog_1: Input validation passed\n");
-
-    if (input_shape.size() != 4)
-    {
-        throw std::invalid_argument("Expected input_shape to have 4 dimensions");
-    }
-    printf("\nLog_2: Shape validation passed\n");
 
     // Check if tensors are on GPU
-    if (!grad_output.is_cuda() || !weight.is_cuda())
+    if (!output.is_cuda() || !weight.is_cuda())
     {
         throw std::runtime_error("Tensors must be on CUDA device for MIOpen");
     }
-    printf("\nLog_2.1: CUDA check passed\n");
-
-    // Get HIP stream from PyTorch's CUDA stream
-    // hipStream_t hip_stream = at::hip::getCurrentHIPStream();
-    // printf("\nLog_2.2: Got HIP stream\n");
 
     // Initialize MIOpen handle
     miopenHandle_t handle;
     miopenStatus_t status = miopenCreate(&handle);
     if (status != miopenStatusSuccess)
     {
-        printf("miopenCreate failed with status: %d\n", status);
         throw std::runtime_error("Failed to create MIOpen handle");
     }
-    printf("\nLog_3: MIOpen handle created\n");
-
-    // // Set stream for MIOpen handle
-    // status = miopenSetStream(handle, hip_stream);
-    // if (status != miopenStatusSuccess) {
-    //     miopenDestroy(handle);
-    //     printf("miopenSetStream failed with status: %d\n", status);
-    //     throw std::runtime_error("Failed to set MIOpen stream");
-    // }
-    // printf("\nLog_3.1: MIOpen stream set\n");
 
     try
     {
         // Create tensor descriptors
-        miopenTensorDescriptor_t grad_output_desc, weight_desc, grad_input_desc;
-        status = miopenCreateTensorDescriptor(&grad_output_desc);
+        miopenTensorDescriptor_t output_desc, weight_desc, input_desc;
+        status = miopenCreateTensorDescriptor(&output_desc);
         if (status != miopenStatusSuccess)
         {
-            throw std::runtime_error("Failed to create grad_output descriptor");
+            throw std::runtime_error("Failed to create output descriptor");
         }
         status = miopenCreateTensorDescriptor(&weight_desc);
         if (status != miopenStatusSuccess)
         {
             throw std::runtime_error("Failed to create weight descriptor");
         }
-        status = miopenCreateTensorDescriptor(&grad_input_desc);
+        status = miopenCreateTensorDescriptor(&input_desc);
         if (status != miopenStatusSuccess)
         {
-            throw std::runtime_error("Failed to create grad_input descriptor");
+            throw std::runtime_error("Failed to create input descriptor");
         }
-        printf("\nLog_4: Tensor descriptors created\n");
 
         // Ensure tensors are contiguous and float type
-        auto grad_output_contiguous = grad_output.contiguous().to(torch::kFloat32);
-        auto weight_contiguous = weight.contiguous().to(torch::kFloat32);
-        printf("\nLog_4.1: Tensors made contiguous\n");
+        auto output_contiguous = output.contiguous();
+        auto weight_contiguous = weight.contiguous();
+        auto input_contiguous = input.contiguous();
+
+        miopenDataType_t data_type = miopenFloat;
+        if (type == "fp16")
+        {
+            data_type = miopenHalf;
+        }
+        else if (type == "bfp16")
+        {
+            data_type = miopenBFloat16;
+        }
+        else if (type == "int8")
+        {
+            data_type = miopenInt8;
+        }
 
         // Set tensor descriptors
-        status = miopenSet4dTensorDescriptor(grad_output_desc, miopenFloat,
-                                             grad_output_contiguous.size(0), grad_output_contiguous.size(1),
-                                             grad_output_contiguous.size(2), grad_output_contiguous.size(3));
+        status = miopenSet4dTensorDescriptor(output_desc, data_type,
+                                             output_contiguous.size(0), output_contiguous.size(1),
+                                             output_contiguous.size(2), output_contiguous.size(3));
         if (status != miopenStatusSuccess)
         {
-            throw std::runtime_error("Failed to set grad_output descriptor");
+            throw std::runtime_error("Failed to set output descriptor");
         }
-        printf("\nLog_5: grad_output descriptor set\n");
 
-        status = miopenSet4dTensorDescriptor(weight_desc, miopenFloat,
+        status = miopenSet4dTensorDescriptor(weight_desc, data_type,
                                              weight_contiguous.size(0), weight_contiguous.size(1),
                                              weight_contiguous.size(2), weight_contiguous.size(3));
         if (status != miopenStatusSuccess)
         {
             throw std::runtime_error("Failed to set weight descriptor");
         }
-        printf("\nLog_6: weight descriptor set\n");
 
-        status = miopenSet4dTensorDescriptor(grad_input_desc, miopenFloat,
-                                             input_shape[0], input_shape[1],
-                                             input_shape[2], input_shape[3]);
+        status = miopenSet4dTensorDescriptor(input_desc, data_type,
+                                             input_contiguous.size(0), input_contiguous.size(1),
+                                             input_contiguous.size(2), input_contiguous.size(3));
         if (status != miopenStatusSuccess)
         {
-            throw std::runtime_error("Failed to set grad_input descriptor");
+            throw std::runtime_error("Failed to set input descriptor");
         }
-        printf("\nLog_7: grad_input descriptor set\n");
 
         // Create convolution descriptor
         miopenConvolutionDescriptor_t conv_desc;
@@ -139,97 +128,186 @@ torch::Tensor gpu_convolution_reference(
         {
             throw std::runtime_error("Failed to initialize convolution descriptor");
         }
-        printf("\nLog_8: Convolution descriptor created and initialized\n");
 
         status = miopenSetConvolutionGroupCount(conv_desc, group);
-        printf("\n group: %d\n", group);
         if (status != miopenStatusSuccess)
         {
             throw std::runtime_error("Failed to set convolution groupCount");
         }
 
         // Create output tensor with proper device and type
-        auto grad_input = torch::empty(input_shape,
-                                       torch::TensorOptions()
-                                           .dtype(torch::kFloat32)
-                                           .device(grad_output.device()));
-        auto grad_input_contiguous = grad_input.contiguous();
-        printf("\nLog_9: Output tensor created\n");
+        // auto grad_input = torch::empty(input_shape,
+        //                                torch::TensorOptions()
+        //                                    .dtype(torch::kFloat32)
+        //                                    .device(grad_output.device()));
 
         // Print tensor info for debugging
-        printf("grad_output shape: [%ld, %ld, %ld, %ld]\n",
-               grad_output_contiguous.size(0), grad_output_contiguous.size(1),
-               grad_output_contiguous.size(2), grad_output_contiguous.size(3));
+#if LOG_ENABLE
+        printf("output shape: [%ld, %ld, %ld, %ld]\n",
+               output_contiguous.size(0), output_contiguous.size(1),
+               output_contiguous.size(2), output_contiguous.size(3));
         printf("weight shape: [%ld, %ld, %ld, %ld]\n",
                weight_contiguous.size(0), weight_contiguous.size(1),
                weight_contiguous.size(2), weight_contiguous.size(3));
-        printf("grad_input shape: [%ld, %ld, %ld, %ld]\n",
-               input_shape[0], input_shape[1], input_shape[2], input_shape[3]);
+        printf("input shape: [%ld, %ld, %ld, %ld]\n",
+               input_contiguous.size(0), input_contiguous.size(1),
+               input_contiguous.size(2), input_contiguous.size(3));
+#endif
 
         // Get workspace size first
         size_t workspace_size = 0;
         status = miopenConvolutionBackwardDataGetWorkSpaceSize(
-            handle, grad_output_desc, weight_desc, conv_desc, grad_input_desc, &workspace_size);
+            handle, output_desc, weight_desc, conv_desc, input_desc, &workspace_size);
 
         void *workspace = nullptr;
         if (workspace_size > 0)
         {
             hipMalloc(&workspace, workspace_size);
-            printf("Allocated workspace: %zu bytes\n", workspace_size);
         }
 
-        printf("\nLog_9.5: About to call miopenConvolutionBackwardDataImmediate\n");
-
         // Call MIOpen backward data convolution with proper error checking
-
         if (operation == 1)
         {
-            status = miopenConvolutionForwardImmediate(
-                handle,
-                weight_desc, weight_contiguous.data_ptr<float>(),
-                grad_input_desc, grad_input_contiguous.data_ptr<float>(),
-                conv_desc,
-                grad_output_desc, grad_output_contiguous.data_ptr<float>(),
-                workspace, workspace_size, 85);
 
-            printf("\nLog_10: miopenConvolutionForwardImmediate returned with status: %d\n", status);
+            if (data_type == miopenFloat)
+            {
+                status = miopenConvolutionForwardImmediate(
+                    handle,
+                    weight_desc, weight_contiguous.data_ptr<float>(),
+                    input_desc, input_contiguous.data_ptr<float>(),
+                    conv_desc,
+                    output_desc, output_contiguous.data_ptr<float>(),
+                    workspace, workspace_size, 85);
+            }
+            else if (data_type == miopenHalf)
+            {
+                status = miopenConvolutionForwardImmediate(
+                    handle,
+                    weight_desc, weight_contiguous.data_ptr<c10::Half>(),
+                    input_desc, input_contiguous.data_ptr<c10::Half>(),
+                    conv_desc,
+                    output_desc, output_contiguous.data_ptr<c10::Half>(),
+                    workspace, workspace_size, 85);
+            }
+            else if (data_type == miopenBFloat16)
+            {
+                status = miopenConvolutionForwardImmediate(
+                    handle,
+                    weight_desc, weight_contiguous.data_ptr<c10::BFloat16>(),
+                    input_desc, input_contiguous.data_ptr<c10::BFloat16>(),
+                    conv_desc,
+                    output_desc, output_contiguous.data_ptr<c10::BFloat16>(),
+                    workspace, workspace_size, 85);
+            }
+            else if (data_type == miopenInt8)
+            {
+                status = miopenConvolutionForwardImmediate(
+                    handle,
+                    weight_desc, weight_contiguous.data_ptr<int8_t>(),
+                    input_desc, input_contiguous.data_ptr<int8_t>(),
+                    conv_desc,
+                    output_desc, output_contiguous.data_ptr<int8_t>(),
+                    workspace, workspace_size, 85);
+            }
+
             if (status != miopenStatusSuccess)
             {
-                printf("MIOpen error status: %d\n", status);
                 throw std::runtime_error("MIOpen forward convolution failed with status: " + std::to_string(status));
             }
         }
         else if (operation == 2)
         {
-            status = miopenConvolutionBackwardDataImmediate(
-                handle,
-                grad_output_desc, grad_output_contiguous.data_ptr<float>(),
-                weight_desc, weight_contiguous.data_ptr<float>(),
-                conv_desc,
-                grad_input_desc, grad_input_contiguous.data_ptr<float>(),
-                workspace, workspace_size, 86);
+            if (data_type == miopenFloat)
+            {
+                status = miopenConvolutionBackwardDataImmediate(
+                    handle,
+                    output_desc, output_contiguous.data_ptr<float>(),
+                    weight_desc, weight_contiguous.data_ptr<float>(),
+                    conv_desc,
+                    input_desc, input_contiguous.data_ptr<float>(),
+                    workspace, workspace_size, 86);
+            }
+            else if (data_type == miopenHalf)
+            {
+                status = miopenConvolutionBackwardDataImmediate(
+                    handle,
+                    output_desc, output_contiguous.data_ptr<c10::Half>(),
+                    weight_desc, weight_contiguous.data_ptr<c10::Half>(),
+                    conv_desc,
+                    input_desc, input_contiguous.data_ptr<c10::Half>(),
+                    workspace, workspace_size, 86);
+            }
+            else if (data_type == miopenBFloat16)
+            {
+                status = miopenConvolutionBackwardDataImmediate(
+                    handle,
+                    output_desc, output_contiguous.data_ptr<c10::BFloat16>(),
+                    weight_desc, weight_contiguous.data_ptr<c10::BFloat16>(),
+                    conv_desc,
+                    input_desc, input_contiguous.data_ptr<c10::BFloat16>(),
+                    workspace, workspace_size, 86);
+            }
+            else if (data_type == miopenInt8)
+            {
+                status = miopenConvolutionBackwardDataImmediate(
+                    handle,
+                    output_desc, output_contiguous.data_ptr<int8_t>(),
+                    weight_desc, weight_contiguous.data_ptr<int8_t>(),
+                    conv_desc,
+                    input_desc, input_contiguous.data_ptr<int8_t>(),
+                    workspace, workspace_size, 86);
+            }
 
-            printf("\nLog_10: miopenConvolutionBackwardDataImmediate returned with status: %d\n", status);
             if (status != miopenStatusSuccess)
             {
-                printf("MIOpen error status: %d\n", status);
                 throw std::runtime_error("MIOpen backward data convolution failed with status: " + std::to_string(status));
             }
         }
         else if (operation == 4)
         {
-            status = miopenConvolutionBackwardWeightsImmediate(
-                handle,
-                grad_output_desc, grad_output_contiguous.data_ptr<float>(),
-                grad_input_desc, grad_input_contiguous.data_ptr<float>(),
-                conv_desc,
-                weight_desc, weight_contiguous.data_ptr<float>(),
-                workspace, workspace_size, 87);
+            if (data_type == miopenFloat)
+            {
+                status = miopenConvolutionBackwardWeightsImmediate(
+                    handle,
+                    output_desc, output_contiguous.data_ptr<float>(),
+                    input_desc, input_contiguous.data_ptr<float>(),
+                    conv_desc,
+                    weight_desc, weight_contiguous.data_ptr<float>(),
+                    workspace, workspace_size, 87);
+            }
+            else if (data_type == miopenHalf)
+            {
+                status = miopenConvolutionBackwardWeightsImmediate(
+                    handle,
+                    output_desc, output_contiguous.data_ptr<c10::Half>(),
+                    input_desc, input_contiguous.data_ptr<c10::Half>(),
+                    conv_desc,
+                    weight_desc, weight_contiguous.data_ptr<c10::Half>(),
+                    workspace, workspace_size, 87);
+            }
+            else if (data_type == miopenBFloat16)
+            {
+                status = miopenConvolutionBackwardWeightsImmediate(
+                    handle,
+                    output_desc, output_contiguous.data_ptr<c10::BFloat16>(),
+                    input_desc, input_contiguous.data_ptr<c10::BFloat16>(),
+                    conv_desc,
+                    weight_desc, weight_contiguous.data_ptr<c10::BFloat16>(),
+                    workspace, workspace_size, 87);
+            }
+            else if (data_type == miopenInt8)
+            {
+                status = miopenConvolutionBackwardWeightsImmediate(
+                    handle,
+                    output_desc, output_contiguous.data_ptr<int8_t>(),
+                    input_desc, input_contiguous.data_ptr<int8_t>(),
+                    conv_desc,
+                    weight_desc, weight_contiguous.data_ptr<int8_t>(),
+                    workspace, workspace_size, 87);
+            }
 
-            printf("\nLog_10: miopenConvolutionBackwardWeightsImmediate returned with status: %d\n", status);
             if (status != miopenStatusSuccess)
             {
-                printf("MIOpen error status: %d\n", status);
                 throw std::runtime_error("MIOpen backward weights convolution failed with status: " + std::to_string(status));
             }
         }
@@ -247,21 +325,19 @@ torch::Tensor gpu_convolution_reference(
         // Cleanup descriptors
         miopenDestroyConvolutionDescriptor(conv_desc);
 
-        miopenDestroyTensorDescriptor(grad_output_desc);
+        miopenDestroyTensorDescriptor(output_desc);
         miopenDestroyTensorDescriptor(weight_desc);
-        miopenDestroyTensorDescriptor(grad_input_desc);
-        printf("\nLog_11: Descriptors cleaned up\n");
+        miopenDestroyTensorDescriptor(input_desc);
 
         miopenDestroy(handle);
-        printf("\nLog_12: Handle destroyed\n");
 
         if (operation == 1)
         {
-            return grad_output_contiguous;
+            return output_contiguous;
         }
         else if (operation == 2)
         {
-            return grad_input_contiguous;
+            return input_contiguous;
         }
         else if (operation == 4)
         {
@@ -295,13 +371,14 @@ PYBIND11_MODULE(MIOpenDriver_Ref, m)
           "Perform convolution reference operation using MIOpen",
           py::arg("grad_output"),
           py::arg("weight"),
-          py::arg("input_shape"),
+          py::arg("input"),
           py::arg("padding"),
           py::arg("stride"),
           py::arg("dilation"),
           py::arg("group"),
           py::arg("solution_id"),
-          py::arg("operation"));
+          py::arg("operation"),
+          py::arg("type"));
 
     m.def("get_miopen_version", &get_miopen_version,
           "Get MIOpen library version");
