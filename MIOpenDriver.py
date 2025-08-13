@@ -26,7 +26,7 @@ def safe_print(*args, **kwargs):
 def generate_fixed_seed_input(shape, dtype, device, verify=False):
 
     if verify:
-        torch.manual_seed(42)
+        torch.manual_seed(12345678)
         # Create separate generator with fixed seed
         input_data = (2 * torch.randn(shape, dtype=dtype, device="cpu", requires_grad=True) - 1)
         if device.type == 'cuda':
@@ -214,7 +214,6 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
 
             if operation == 1:  # Forward convolution
                 result = conv_fn(input_tensor, weight, bias, **conv_args)
-
                 return result
 
             elif operation == 2:  # Backward data
@@ -328,7 +327,7 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
             elapsed_time_ms = (end_time - start_time) * 1000
 
         if (args.verify):
-            status = DataHash.summarize_conv_output(result, include_histogram=False, bins=6)
+            status = DataHash.summarize_conv_output(result, include_histogram=True, bins=6)
             # print(f"Convolution result shape: {result.shape}")
             # print(f"Convolution status: {status}")
 
