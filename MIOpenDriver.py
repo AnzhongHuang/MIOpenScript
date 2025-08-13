@@ -37,6 +37,52 @@ def generate_fixed_seed_input(shape, dtype, device, verify=False):
         input_data = torch.randn(shape, dtype=dtype, device=device, requires_grad=True)
     return input_data
 
+def generate_miopen_deriver_cmd(args, type_str):
+    cmd = f"MIOpenDriver conv{type_str} -F {args.forw} -n {args.batchsize} -c {args.in_channels} "
+    
+    is_3d = args.spatial_dim == 3
+    if is_3d:
+        cmd += f"-d {args.in_d} "
+    cmd += f"-H {args.in_h} -W {args.in_w} -k {args.out_channels} "
+    trace_name += f"-H{args.in_h}-W{args.in_w}-k{args.out_channels}"
+
+    if is_3d:
+        cmd += f"-@ {args.fil_d} "
+    cmd += f"-y {args.fil_h} -x {args.fil_w} "
+    trace_name += f"-y{args.fil_h}-x{args.fil_w}"
+
+    if is_3d:
+        cmd += f"-$ {args.pad_d} "
+    cmd += f"-p {args.pad_h} -q {args.pad_w} "
+    trace_name += f"-p{args.pad_h}-q{args.pad_w}"
+
+    if is_3d:
+        cmd += f"-# {args.conv_stride_d} "
+    cmd += f"-u {args.conv_stride_h} -v {args.conv_stride_w} "
+    trace_name += f"-u{args.conv_stride_h}-v{args.conv_stride_w}"
+
+    if is_3d:
+        cmd += f"-^ {args.dilation_d} "
+    cmd += f"-l {args.dilation_h} -j {args.dilation_w} "
+    trace_name += f"-l{args.dilation_h}-j{args.dilation_w}"
+
+    cmd += f"-g {args.group_count} -m {args.mode} -_ {args.spatial_dim} "
+    trace_name += f"-g{args.group_count}"
+
+    cmd += f"-t {args.time} -S {args.solution} -V {args.verify}"
+
+    # Add file parameters if specified
+    if args.in_data:
+        cmd += f" -d {args.in_data}"
+    if args.weights:
+        cmd += f" -e {args.weights}"
+    if args.dout_data:
+        cmd += f" -D {args.dout_data}"
+    if args.in_bias:
+        cmd += f" -a {args.in_bias}"
+        
+    return cmd
+
 def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
 
     if args.dbshape:
@@ -159,48 +205,9 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
     grad_output = create_tensor(grad_output_shape, args.dout_data)
 
     trace_name = f"conv{type_str}-F{args.forw}-n{args.batchsize}-c{args.in_channels}"
+    
     # Generate equivalent MIOpenDriver command
-    cmd = f"MIOpenDriver conv{type_str} -F {args.forw} -n {args.batchsize} -c {args.in_channels} "
-
-    if is_3d:
-        cmd += f"-d {args.in_d} "
-    cmd += f"-H {args.in_h} -W {args.in_w} -k {args.out_channels} "
-    trace_name += f"-H{args.in_h}-W{args.in_w}-k{args.out_channels}"
-
-    if is_3d:
-        cmd += f"-@ {args.fil_d} "
-    cmd += f"-y {args.fil_h} -x {args.fil_w} "
-    trace_name += f"-y{args.fil_h}-x{args.fil_w}"
-
-    if is_3d:
-        cmd += f"-$ {args.pad_d} "
-    cmd += f"-p {args.pad_h} -q {args.pad_w} "
-    trace_name += f"-p{args.pad_h}-q{args.pad_w}"
-
-    if is_3d:
-        cmd += f"-# {args.conv_stride_d} "
-    cmd += f"-u {args.conv_stride_h} -v {args.conv_stride_w} "
-    trace_name += f"-u{args.conv_stride_h}-v{args.conv_stride_w}"
-
-    if is_3d:
-        cmd += f"-^ {args.dilation_d} "
-    cmd += f"-l {args.dilation_h} -j {args.dilation_w} "
-    trace_name += f"-l{args.dilation_h}-j{args.dilation_w}"
-
-    cmd += f"-g {args.group_count} -m {args.mode} -_ {args.spatial_dim} "
-    trace_name += f"-g{args.group_count}"
-
-    cmd += f"-t {args.time} -S {args.solution} -V {args.verify}"
-
-    # Add file parameters if specified
-    if args.in_data:
-        cmd += f" -d {args.in_data}"
-    if args.weights:
-        cmd += f" -e {args.weights}"
-    if args.dout_data:
-        cmd += f" -D {args.dout_data}"
-    if args.in_bias:
-        cmd += f" -a {args.in_bias}"
+    # cmd = generate_miopen_deriver_cmd(args, type_str)
 
     # Wrapper function for convolution operations
     def run_convolution(operation):
@@ -342,9 +349,8 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
 
         elapsed_time_ms = 0
         result = None
-        golden_result = None
-        golden_naive_kernel = True
         
+        # run gpu kernel
         if device.type == 'cuda':
             with torch.cuda.stream(stream):
                 start_event[0].record()
@@ -352,40 +358,7 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
                     result = run_convolution(forw)
                 end_event[0].record()
                 stream.synchronize()
-                
-                # compare gpu result with golden
-                golden_result = run_convolution_ref(forw, type_str)
-                # golden_result = None
-                stream.synchronize()
-                
-                # result = run_convolution_ref(forw, type_str)
-                # stream.synchronize()
-                
-                # Only compare if both results are available
-                if golden_result is not None and result is not None:
-                    try:
-                        # if result is not None:
-                        #     result = result.float()
-                            
-                        is_close = torch.allclose(result, golden_result, rtol=1e-3, atol=1e-3)
-                        
-                        if not is_close:
-                            diff = torch.abs(result - golden_result)
-                            max_diff = torch.max(diff).item()
-                            mean_diff = torch.mean(diff).item()
-                            # print(f"Max difference: {max_diff:.8f}")
-                            # print(f"Mean difference: {mean_diff:.8f}")
-                            print(f"Failed!!! <Results not match with golden reference: {is_close}>")
-                        else:
-                            print(f"Success!!! <Results match with golden reference: {is_close}>")
-                            
-                    except Exception as e:
-                        print(f"Error comparing results: {e}")
-                else:
-                    print("Skipping golden comparison (reference result not available)")
-                
             elapsed_time_ms = start_event[0].elapsed_time(end_event[0])
-
         else:
             # CPU time measurement
             start_time = time.time()
@@ -395,24 +368,39 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
             end_time = time.time()
             elapsed_time_ms = (end_time - start_time) * 1000
 
+        # verify gpu result
         if (args.verify):
-            status = None
-            if args.cpu == 0:
-                status = DataHash.summarize_conv_output(golden_result, include_histogram=False, bins=6)
-            else:
-                status = DataHash.summarize_conv_output(result, include_histogram=False, bins=6)
+            # Check if the current shape is already in the database
+            # Generate shape key
+            shape_dict = DataHash.generate_shape_key(args)
+            
+            golden_database_file = "conv_golden_stats.json"
+            exist, golden_stats = DataHash.load_golden_stats(shape_dict, golden_database_file)
+            
+            # Current shape golden is not exist, so need to compute golden
+            if not exist:
+                golden_result = None
+                if device.type == 'cuda':
+                    with torch.cuda.stream(stream):
+                        golden_result = run_convolution_ref(forw, type_str)
+                        stream.synchronize()
+                else:
+                    golden_result = run_convolution(forw)
+                    
+                golden_stats = DataHash.summarize_conv_output(golden_result, include_histogram=False, bins=6)
+                DataHash.save_golden_stats(golden_stats, shape_dict, golden_database_file)
+            
+            stats = DataHash.summarize_conv_output(result, include_histogram=False, bins=6)
             # print(f"Convolution result shape: {result.shape}")
             # print(f"Convolution status: {status}")
 
-            golden_stats = DataHash.load_golden_stats("conv_output_stats.json")
             tolerance = 0.05
             if golden_stats:
-                res, max_error, channel_errors = DataHash.compare_stats(golden_stats, status, tolerance=tolerance)
+                res, max_error, channel_errors = DataHash.compare_stats(golden_stats, stats, tolerance=tolerance)
                 if res:
                     print(f"Conv Verify OK: ({max_error} < {tolerance})")
                 else:
                     print(f"Conv Verify FAILED: {max_error} >= {tolerance}")
-            DataHash.save_golden_stats(status, "conv_output_stats.json")
 
         # The elapsed time is bigger than kernel execution time
         safe_print(f"Test {test_idx}, GPU {gpu_idx} - execution time: {elapsed_time_ms/(args.iter):.4f} ms")

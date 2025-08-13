@@ -123,6 +123,7 @@ def get_direction_str(forw):
 
 @dataclass
 class MIArgs:
+    # shape param
     forw: int
     batchsize: int
     in_channels: int
@@ -144,6 +145,8 @@ class MIArgs:
     dilation_d: int = 0
     group_count: int = 1
     spatial_dim: int = 2
+    
+    # run param
     solution: int = -1
     time: int = 0
     verify: int = 1
