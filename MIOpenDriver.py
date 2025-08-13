@@ -342,6 +342,9 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
 
         elapsed_time_ms = 0
         result = None
+        golden_result = None
+        golden_naive_kernel = True
+        
         if device.type == 'cuda':
             with torch.cuda.stream(stream):
                 start_event[0].record()
@@ -353,6 +356,9 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
                 # compare gpu result with golden
                 golden_result = run_convolution_ref(forw, type_str)
                 # golden_result = None
+                stream.synchronize()
+                
+                # result = run_convolution_ref(forw, type_str)
                 # stream.synchronize()
                 
                 # Only compare if both results are available
@@ -361,7 +367,7 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
                         # if result is not None:
                         #     result = result.float()
                             
-                        is_close = torch.allclose(result, golden_result, rtol=1e-2, atol=1e-2)
+                        is_close = torch.allclose(result, golden_result, rtol=1e-3, atol=1e-3)
                         
                         if not is_close:
                             diff = torch.abs(result - golden_result)
@@ -390,7 +396,11 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
             elapsed_time_ms = (end_time - start_time) * 1000
 
         if (args.verify):
-            status = DataHash.summarize_conv_output(result, include_histogram=True, bins=6)
+            status = None
+            if args.cpu == 0:
+                status = DataHash.summarize_conv_output(golden_result, include_histogram=False, bins=6)
+            else:
+                status = DataHash.summarize_conv_output(result, include_histogram=False, bins=6)
             # print(f"Convolution result shape: {result.shape}")
             # print(f"Convolution status: {status}")
 
