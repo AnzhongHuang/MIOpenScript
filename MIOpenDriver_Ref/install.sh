@@ -6,6 +6,6 @@ cd /mnt/workspace/ytn/docker_path/MIOpenScript/MIOpenDriver_Ref
 
 python3 setup.py build_ext --inplace
 
-rm ../*.so
+rm ../MIOpenDriver_Ref.*.so
 
-cp ./*.so ../
+mv ./MIOpenDriver_Ref.*.so ../

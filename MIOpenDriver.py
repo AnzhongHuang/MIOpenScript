@@ -16,8 +16,12 @@ from miopUtil.MIArgs import MiopenDataType
 from miopUtil.MIArgs import MIArgs
 import MIOpenDriver_Ref
 import miopUtil.DataHash as DataHash
+import miopUtil.PrintStat as PrintStat
 import threading
+
 print_lock = threading.Lock()
+
+global_gpu_time = 0
 
 def safe_print(*args, **kwargs):
     """Thread-safe print function"""
@@ -369,14 +373,14 @@ def RunConv(device, args, in_data_type, golden_database, gpu_idx, test_idx=0):
             elapsed_time_ms = (end_time - start_time) * 1000
 
         # verify gpu result
-        # args.verify = 0
+        args.verify = 0
         if (args.verify):
             # Check if the current shape is already in the database
             # Generate shape key
             shape_dict = DataHash.generate_shape_key(args)
-                   
+        
             exist, golden_stats = DataHash.load_golden_stats_from_memory(shape_dict, golden_database, need_lock = args.save_db)
-            
+        
             # Current shape golden is not exist, so need to compute golden
             if not exist:
                 golden_result = None
@@ -406,7 +410,10 @@ def RunConv(device, args, in_data_type, golden_database, gpu_idx, test_idx=0):
 
         # The elapsed time is bigger than kernel execution time
         safe_print(f"Test {test_idx}, GPU {gpu_idx} - execution time: {elapsed_time_ms/(args.iter):.4f} ms")
-
+        
+        # PrintStat.print_stats(args, input_tensor, weight, grad_output, test_idx, elapsed_time_ms)
+            
+        
     # Print results
     op_names = {
         1: "FWD",
@@ -490,6 +497,7 @@ def main():
 
     elapsed_time = (end_time - start_time) * 1000
     print(f"CPU time: {elapsed_time:.6f} ms" )
+    print(f"global GPU time: {global_gpu_time:.6f} ms")
 
 if __name__ == "__main__":
     main()
