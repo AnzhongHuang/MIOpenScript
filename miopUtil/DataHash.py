@@ -7,6 +7,7 @@ import time
 import threading
 from scipy.stats import wasserstein_distance
 
+database_lock = threading.Lock()
 # Global thread-safe file handler instances
 _file_handlers = {}
 _file_handlers_lock = threading.Lock()
@@ -191,47 +192,18 @@ def summarize_conv_output(tensor, include_histogram=False, bins=10):
         stats.append(channel_stats)
     return stats
 
-def save_golden_stats(stats, shape_dict, file_path):
+def save_golden_stats_to_file(stats, file_path):
     """Thread-safe save statistics to JSON file"""
     try:
         if stats is None:
             print("Warning: stats is None, skipping save")
             return
         
-        if not shape_dict or not isinstance(shape_dict, dict):
-            print(f"Warning: Invalid shape_dict: {shape_dict}")
-            return
-        
         # Get thread-safe file handler
         handler = get_thread_safe_handler(file_path)
         
-        # Read existing data
-        all_data = handler.read_json()
-        
-        # Get hash key and shape info
-        try:
-            hash_key = list(shape_dict.keys())[0]
-            shape_info = shape_dict[hash_key].get("shape", {})
-        except (IndexError, KeyError, AttributeError) as e:
-            print(f"Error extracting hash key or shape info: {e}")
-            return
-        
-        # Validate stats
-        if not isinstance(stats, list):
-            print(f"Warning: stats is not a list: {type(stats)}")
-            return
-        
-        # Update data
-        if hash_key not in all_data:
-            all_data[hash_key] = {}
-        
-        all_data[hash_key]["shape"] = shape_info
-        all_data[hash_key]["stats"] = stats
-        # all_data[hash_key]["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        # all_data[hash_key]["thread_id"] = threading.get_ident()
-        
         # Write data atomically
-        handler.write_json(all_data)
+        handler.write_json(stats)
         # print(f"Successfully saved stats to {file_path} (thread: {threading.get_ident()})")
         
     except Exception as e:
@@ -239,12 +211,9 @@ def save_golden_stats(stats, shape_dict, file_path):
         import traceback
         traceback.print_exc()
 
-def load_golden_stats(shape_info, file_path):
+def load_golden_stats_from_file(file_path):
     """Thread-safe load statistics from JSON file"""
     try:
-        if shape_info is None:
-            return False, None
-        
         # Get thread-safe file handler
         handler = get_thread_safe_handler(file_path)
         
@@ -252,23 +221,14 @@ def load_golden_stats(shape_info, file_path):
         all_stats = handler.read_json()
         
         if not all_stats:
-            return False, None
-        
-        shape_hash_key = list(shape_info.keys())[0]
-        
-        # Check if the specific shape exists
-        if shape_hash_key in all_stats:
-            entry = all_stats[shape_hash_key]
-            if "stats" in entry:
-                # print(f"Found matching shape (thread: {threading.get_ident()})")
-                return True, entry["stats"]
+            return {}
         
         # print(f"Shape not found (thread: {threading.get_ident()})")
-        return False, None
+        return all_stats
         
     except Exception as e:
         print(f"Error loading golden stats: {e}")
-        return False, None
+        return None
 
 def compare_stats(golden_stats, test_stats, tolerance=0.05):
     """Compare two sets of statistics with tolerance threshold"""
@@ -307,3 +267,54 @@ def compare_stats(golden_stats, test_stats, tolerance=0.05):
     
     max_error = max(channel_errors) if channel_errors else 0.0
     return max_error <= tolerance, max_error, channel_errors
+
+def load_golden_stats_from_memory(shape_dict, database, need_lock = 0):
+    """Thread-safe load from in-memory database"""
+    try:
+        if shape_dict is None:
+            return False, None
+        
+        # Check if shape_dict is actually a dictionary
+        if not isinstance(shape_dict, dict) or not isinstance(database, dict):
+            print(f"Error: shape_dict or database is not a dictionary, got {type(shape_dict)}, got {type(database)}")
+            return False, None
+        
+        shape_hash_key = list(shape_dict.keys())[0]
+        
+        if need_lock:
+            with database_lock:
+                if shape_hash_key in database:
+                    entry = database[shape_hash_key]
+                    if "stats" in entry:
+                        return True, entry["stats"]
+        else:
+            if shape_hash_key in database:
+                entry = database[shape_hash_key]
+                if "stats" in entry:
+                    return True, entry["stats"]
+        
+        return False, None
+        
+    except Exception as e:
+        print(f"Error loading from memory database: {e}")
+        return False, None
+
+def save_golden_stats_to_memory(stats, shape_dict, database):
+    """Thread-safe save to in-memory database"""
+    try:
+        if stats is None or not shape_dict or not isinstance(shape_dict, dict) or not isinstance(database, dict):
+            print(f"Error: shape_dict or database is not a dictionary, got {type(shape_dict)}, got {type(database)}")
+            return
+        
+        hash_key = list(shape_dict.keys())[0]
+        shape_info = shape_dict[hash_key].get("shape", {})
+        
+        with database_lock:
+            if hash_key not in database:
+                database[hash_key] = {}
+            
+            database[hash_key]["shape"] = shape_info
+            database[hash_key]["stats"] = stats
+        
+    except Exception as e:
+        print(f"Error saving to memory database: {e}")

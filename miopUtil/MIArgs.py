@@ -67,7 +67,8 @@ FLAG_MAPPING = {
     '--gpu': 'gpu',
     '--dbshape': 'dbshape',
     '--warmup': 'warmup',
-    '--cpu' : 'cpu'
+    '--cpu' : 'cpu',
+    '--save_db': "save_db"
 }
 
 CONVERTERS = {
@@ -82,7 +83,7 @@ CONVERTERS = {
     'mode': str, 'in_data': str, 'weights': str, 'dout_data': str, 'in_bias': str,
     'pad_mode': str, 'fil_layout': str, 'in_layout': str, 'out_layout': str,
     'verification_cache': str, 'shapeformat': str, 'trace': str, 'event': str,
-    'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int, 'gpualloc': int
+    'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int, 'gpualloc': int, 'save_db': int
 }
 
 class MiopenDataType(Enum):
@@ -177,6 +178,7 @@ class MIArgs:
     gpu: int = 0
     dbshape: int = 0
     cpu: int = 0 # 1 use CPU for verification
+    save_db: int = 0
 
     in_data_type: MiopenDataType = MiopenDataType.miopenHalf
     shapeformat: str = 'vs'
@@ -243,7 +245,8 @@ class MIArgs:
         args['dbshape'] = 0
         args['warmup'] = 3
         args['cpu'] = 0  # Use CPU for verification
-
+        args['save_db'] = 0 # Should the metadata of the current shape be saved to the database
+        
         while idx < len(args_list):
             if args_list[idx].startswith('-'):
                 key = args_list[idx]

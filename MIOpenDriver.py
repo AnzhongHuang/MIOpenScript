@@ -83,7 +83,7 @@ def generate_miopen_deriver_cmd(args, type_str):
         
     return cmd
 
-def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
+def RunConv(device, args, in_data_type, golden_database, gpu_idx, test_idx=0):
 
     if args.dbshape:
         problem = shapeConvert.ProblemDescription(
@@ -369,13 +369,13 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
             elapsed_time_ms = (end_time - start_time) * 1000
 
         # verify gpu result
+        # args.verify = 0
         if (args.verify):
             # Check if the current shape is already in the database
             # Generate shape key
             shape_dict = DataHash.generate_shape_key(args)
-            
-            golden_database_file = "conv_golden_stats.json"
-            exist, golden_stats = DataHash.load_golden_stats(shape_dict, golden_database_file)
+                   
+            exist, golden_stats = DataHash.load_golden_stats_from_memory(shape_dict, golden_database, need_lock = args.save_db)
             
             # Current shape golden is not exist, so need to compute golden
             if not exist:
@@ -388,7 +388,9 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
                     golden_result = run_convolution(forw)
                     
                 golden_stats = DataHash.summarize_conv_output(golden_result, include_histogram=False, bins=6)
-                DataHash.save_golden_stats(golden_stats, shape_dict, golden_database_file)
+                
+                if args.save_db:
+                    DataHash.save_golden_stats_to_memory(golden_stats, shape_dict, golden_database)
             
             stats = DataHash.summarize_conv_output(result, include_histogram=False, bins=6)
             # print(f"Convolution result shape: {result.shape}")
@@ -439,7 +441,14 @@ def Solve():
     else:
         num_gpus = 20
         devices = [torch.device('cpu')  for i in range(num_gpus)]
-
+        
+    # Load golden database
+    golden_database_file = "conv_golden_stats.json"
+    # if not os.path.exists(golden_database_file):
+    #     DataHash.create_golden_stats(golden_database_file)
+    
+    golden_database = DataHash.load_golden_stats_from_file(golden_database_file)
+    
     fileInput = "--input" in sys.argv[1]
     if fileInput:
         convRunList = ParseRunList(sys.argv[2])
@@ -457,7 +466,7 @@ def Solve():
                 gpu_idx = next(gpu_ids)
                 # Submit the task to the executor
                 test_idx += 1
-                futures.append(executor.submit(RunConv, devices[gpu_idx], args, in_data_type, gpu_idx, test_idx))
+                futures.append(executor.submit(RunConv, devices[gpu_idx], args, in_data_type, golden_database, gpu_idx, test_idx))
 
             # Optionally wait for all futures to complete
             concurrent.futures.wait(futures)
@@ -469,7 +478,10 @@ def Solve():
             dev = torch.device('cpu')
         else:
             dev = devices[args.gpu] if args.gpu < num_gpus else devices[0]
-        RunConv(dev, args, args.in_data_type, args.gpu)
+        RunConv(dev, args, args.in_data_type, golden_database, args.gpu)
+
+    # Store golden database
+    DataHash.save_golden_stats_to_file(golden_database, golden_database_file)
 
 def main():
     start_time = time.time()
