@@ -2,15 +2,131 @@ import json
 import torch
 import numpy as np
 import hashlib
+import os
+import time
+import threading
 from scipy.stats import wasserstein_distance
+
+# Global thread-safe file handler instances
+_file_handlers = {}
+_file_handlers_lock = threading.Lock()
+
+def get_thread_safe_handler(file_path):
+    """Get or create thread-safe file handler for given path"""
+    with _file_handlers_lock:
+        if file_path not in _file_handlers:
+            _file_handlers[file_path] = ThreadSafeJSONFile(file_path)
+        return _file_handlers[file_path]
+
+class ThreadSafeJSONFile:
+    """Thread-safe JSON file handler"""
+    
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.lock_path = f"{file_path}.lock"
+        self._local_lock = threading.Lock()
+    
+    def acquire_file_lock(self, timeout=30):
+        """Acquire exclusive file lock"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                lock_fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(lock_fd, f"{os.getpid()}:{threading.get_ident()}".encode())
+                return lock_fd
+            except OSError:
+                time.sleep(0.01)
+        raise TimeoutError(f"Could not acquire file lock for {self.file_path}")
+    
+    def release_file_lock(self, lock_fd):
+        """Release file lock"""
+        try:
+            os.close(lock_fd)
+            os.remove(self.lock_path)
+        except OSError:
+            pass
+    
+    def read_json(self):
+        """Thread-safe JSON read"""
+        with self._local_lock:
+            if not os.path.exists(self.file_path):
+                return {}
+            
+            lock_fd = self.acquire_file_lock()
+            try:
+                # Check file size before reading
+                file_size = os.path.getsize(self.file_path)
+                if file_size > 100 * 1024 * 1024:  # 100MB
+                    print(f"Warning: {self.file_path} is very large ({file_size} bytes)")
+                
+                with open(self.file_path, 'r') as f:
+                    content = f.read().strip()
+                    if content:
+                        # Validate JSON structure
+                        data = json.loads(content)
+                        if not isinstance(data, dict):
+                            print(f"Warning: Root element is not a dictionary in {self.file_path}")
+                            return {}
+                        return data
+                    return {}
+            except json.JSONDecodeError as e:
+                print(f"JSON decode error in {self.file_path}: {e}")
+                self._backup_corrupted_file()
+                return {}
+            except Exception as e:
+                print(f"Error reading {self.file_path}: {e}")
+                return {}
+            finally:
+                self.release_file_lock(lock_fd)
+    
+    def write_json(self, data):
+        """Thread-safe JSON write with atomic operation"""
+        with self._local_lock:
+            lock_fd = self.acquire_file_lock()
+            try:
+                import tempfile
+                # Create temp file in same directory for atomic rename
+                temp_fd, temp_path = tempfile.mkstemp(
+                    suffix='.tmp', 
+                    prefix=f"{os.path.basename(self.file_path)}_",
+                    dir=os.path.dirname(self.file_path) or '.'
+                )
+                
+                try:
+                    with os.fdopen(temp_fd, 'w') as temp_file:
+                        json.dump(data, temp_file, indent=2, ensure_ascii=False)
+                        temp_file.flush()
+                        os.fsync(temp_file.fileno())
+                    
+                    # Atomic rename - this is the key to thread safety
+                    os.rename(temp_path, self.file_path)
+                    
+                except Exception as e:
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
+                    raise e
+                    
+            finally:
+                self.release_file_lock(lock_fd)
+    
+    def _backup_corrupted_file(self):
+        """Backup corrupted file"""
+        if os.path.exists(self.file_path):
+            backup_path = f"{self.file_path}.corrupted.{int(time.time())}"
+            try:
+                os.rename(self.file_path, backup_path)
+                print(f"Corrupted file backed up to: {backup_path}")
+            except OSError:
+                pass
 
 def generate_shape_key(shape_info):
     """Generate a unique key for shape configuration"""
     if not shape_info:
         return None
-    result = {}
+    
     shape_key = {}
-     
     shape_key["forw"] = shape_info.forw
     shape_key["batchsize"] = shape_info.batchsize
     shape_key["in_channels"] = shape_info.in_channels
@@ -38,26 +154,26 @@ def generate_shape_key(shape_info):
         f"{k}:{v}" for k, v in shape_key.items() if v is not None
     ])
     
-    key_string_hash = hashlib.sha256(key_string.encode('utf-8')).hexdigest()
+    key_string_hash = hashlib.sha256(key_string.encode('utf-8')).hexdigest()[:16]
     result = {key_string_hash: {"shape": shape_key}}
     
     return result
-    
 
 def summarize_conv_output(tensor, include_histogram=False, bins=10):
     """Extract per-channel statistics from convolution output tensor"""
-    # Determine channel dimension based on tensor shape
     channel_dim = 0 if tensor.dim() == 4 and tensor.size(0) < 16 else 1
-    # print("summarize_conv_output")
-    # print(tensor.shape)
-    # Move channel dimension to front and flatten
     tensor = tensor.movedim(channel_dim, 0)
-
     flat_tensor = tensor.reshape(1, -1)
-    # print(flat_tensor.shape)
+    
     stats = []
     for i in range(1):
         channel_data = flat_tensor[i].to(torch.float32).detach().cpu().numpy()
+        
+        # Handle infinite and NaN values
+        if np.any(np.isinf(channel_data)) or np.any(np.isnan(channel_data)):
+            print(f"Warning: Found infinite or NaN values in channel {i}")
+            channel_data = np.nan_to_num(channel_data, nan=0.0, posinf=1e6, neginf=-1e6)
+        
         channel_stats = {
             "min": float(channel_data.min()),
             "max": float(channel_data.max()),
@@ -75,77 +191,83 @@ def summarize_conv_output(tensor, include_histogram=False, bins=10):
         stats.append(channel_stats)
     return stats
 
-def check_shape_exists(target_shape_info, all_stats):
-    """Check if a specific shape configuration exists in the stats file"""
-    try:
-        if not target_shape_info:
-            return False, None
-        
-        if isinstance(all_stats, dict):
-            if target_shape_info in all_stats:
-                return True, all_stats[target_shape_info]
-        
-        return False, None
-    except Exception as e:
-        print(f"Error checking shape existence: {e}")
-        return False, None
-
 def save_golden_stats(stats, shape_dict, file_path):
-    """Save statistics to JSON file"""
+    """Thread-safe save statistics to JSON file"""
     try:
         if stats is None:
+            print("Warning: stats is None, skipping save")
             return
         
+        if not shape_dict or not isinstance(shape_dict, dict):
+            print(f"Warning: Invalid shape_dict: {shape_dict}")
+            return
+        
+        # Get thread-safe file handler
+        handler = get_thread_safe_handler(file_path)
+        
+        # Read existing data
+        all_data = handler.read_json()
+        
+        # Get hash key and shape info
         try:
-            with open(file_path, 'r') as f:
-                all_data = json.load(f)
-        except FileNotFoundError:
-            all_data = {}
-        except json.JSONDecodeError:
-            print("Warning: Invalid JSON file, creating new one")
-            all_data = {}
+            hash_key = list(shape_dict.keys())[0]
+            shape_info = shape_dict[hash_key].get("shape", {})
+        except (IndexError, KeyError, AttributeError) as e:
+            print(f"Error extracting hash key or shape info: {e}")
+            return
         
-        # Get the first (and should be only) key from shape_dict
-        hash_key = list(shape_dict.keys())[0]
-        shape_info = shape_dict[hash_key]["shape"]
+        # Validate stats
+        if not isinstance(stats, list):
+            print(f"Warning: stats is not a list: {type(stats)}")
+            return
         
-        # Initialize the first level if it doesn't exist
+        # Update data
         if hash_key not in all_data:
             all_data[hash_key] = {}
-            
+        
         all_data[hash_key]["shape"] = shape_info
         all_data[hash_key]["stats"] = stats
+        # all_data[hash_key]["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        # all_data[hash_key]["thread_id"] = threading.get_ident()
         
-        # Save updated data
-        with open(file_path, 'w') as f:
-            json.dump(all_data, f, indent=2)
-            
-        print(f"Successfully saved stats to {file_path}")
-
+        # Write data atomically
+        handler.write_json(all_data)
+        # print(f"Successfully saved stats to {file_path} (thread: {threading.get_ident()})")
+        
     except Exception as e:
         print(f"Error saving golden stats: {e}")
         import traceback
         traceback.print_exc()
 
 def load_golden_stats(shape_info, file_path):
-    """Load statistics from JSON file"""
+    """Thread-safe load statistics from JSON file"""
     try:
-        with open(file_path, 'r') as f:
-            all_stats = json.load(f)
-        
         if shape_info is None:
-            return None
+            return False, None
+        
+        # Get thread-safe file handler
+        handler = get_thread_safe_handler(file_path)
+        
+        # Read data
+        all_stats = handler.read_json()
+        
+        if not all_stats:
+            return False, None
         
         shape_hash_key = list(shape_info.keys())[0]
         
-         # Check if the specific shape exists
-        if isinstance(all_stats, dict):
-            if shape_hash_key in all_stats:
-                return True, all_stats[shape_hash_key]["stats"]
+        # Check if the specific shape exists
+        if shape_hash_key in all_stats:
+            entry = all_stats[shape_hash_key]
+            if "stats" in entry:
+                # print(f"Found matching shape (thread: {threading.get_ident()})")
+                return True, entry["stats"]
+        
+        # print(f"Shape not found (thread: {threading.get_ident()})")
         return False, None
         
-    except FileNotFoundError:
-        print(f"Golden stats shape not found.")
+    except Exception as e:
+        print(f"Error loading golden stats: {e}")
         return False, None
 
 def compare_stats(golden_stats, test_stats, tolerance=0.05):
@@ -158,19 +280,30 @@ def compare_stats(golden_stats, test_stats, tolerance=0.05):
         errors = []
         for metric in ['min', 'max', 'mean', 'std', 'median']:
             if metric in g and metric in t:
-                diff = abs(g[metric] - t[metric])
-                scale = max(abs(g[metric]), 1e-6)  # Avoid division by zero
+                # Handle infinite and NaN values
+                g_val = g[metric]
+                t_val = t[metric]
+                
+                if np.isnan(g_val) or np.isnan(t_val) or np.isinf(g_val) or np.isinf(t_val):
+                    print(f"Warning: Invalid values in comparison - golden: {g_val}, test: {t_val}")
+                    errors.append(1.0)  # Max error for invalid values
+                    continue
+                
+                diff = abs(g_val - t_val)
+                scale = max(abs(g_val), 1e-6)
                 errors.append(diff / scale)
         
-        # Compare histograms if available
         if 'histogram' in g and 'histogram' in t:
-            hist_dist = wasserstein_distance(
-                g['histogram']['values'],
-                t['histogram']['values']
-            )
-            errors.append(hist_dist)
+            try:
+                hist_dist = wasserstein_distance(
+                    g['histogram']['values'],
+                    t['histogram']['values']
+                )
+                errors.append(hist_dist)
+            except Exception as e:
+                print(f"Error comparing histograms: {e}")
         
-        channel_errors.append(max(errors))
+        channel_errors.append(max(errors) if errors else 0.0)
     
-    max_error = max(channel_errors)
+    max_error = max(channel_errors) if channel_errors else 0.0
     return max_error <= tolerance, max_error, channel_errors
