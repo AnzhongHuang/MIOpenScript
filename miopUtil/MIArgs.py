@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 from enum import Enum
+import shlex
 
 # Mapping of flags to normalized names (both short and long forms)
 FLAG_MAPPING = {
@@ -67,7 +68,8 @@ FLAG_MAPPING = {
     '--gpu': 'gpu',
     '--dbshape': 'dbshape',
     '--warmup': 'warmup',
-    '--cpu' : 'cpu'
+    '--cpu' : 'cpu',
+    '--save_db': "save_db"
 }
 
 CONVERTERS = {
@@ -82,7 +84,7 @@ CONVERTERS = {
     'mode': str, 'in_data': str, 'weights': str, 'dout_data': str, 'in_bias': str,
     'pad_mode': str, 'fil_layout': str, 'in_layout': str, 'out_layout': str,
     'verification_cache': str, 'shapeformat': str, 'trace': str, 'event': str,
-    'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int, 'gpualloc': int
+    'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int, 'gpualloc': int, 'save_db': int
 }
 
 class MiopenDataType(Enum):
@@ -120,9 +122,27 @@ def get_direction_str(forw):
     else:
         return "unknown"
 
+def ParseRunList(file_path):
+    convRunList = []
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+
+    for line in lines:
+        command_line = line.strip()
+        if command_line:
+            try:
+                args_list = shlex.split(command_line)
+                args = MIArgs.ParseParam(args_list[1:])
+                convRunList.append((args, args.in_data_type))
+
+            except Exception as e:
+                print(f"Error parsing command line: {command_line}\n{e}")
+    return convRunList
+
 
 @dataclass
 class MIArgs:
+    # shape param
     forw: int
     batchsize: int
     in_channels: int
@@ -144,6 +164,8 @@ class MIArgs:
     dilation_d: int = 0
     group_count: int = 1
     spatial_dim: int = 2
+    
+    # run param
     solution: int = -1
     time: int = 0
     verify: int = 1
@@ -174,6 +196,7 @@ class MIArgs:
     gpu: int = 0
     dbshape: int = 0
     cpu: int = 0 # 1 use CPU for verification
+    save_db: int = 0
 
     in_data_type: MiopenDataType = MiopenDataType.miopenHalf
     shapeformat: str = 'vs'
@@ -240,7 +263,8 @@ class MIArgs:
         args['dbshape'] = 0
         args['warmup'] = 3
         args['cpu'] = 0  # Use CPU for verification
-
+        args['save_db'] = 0 # Should the metadata of the current shape be saved to the database
+        
         while idx < len(args_list):
             if args_list[idx].startswith('-'):
                 key = args_list[idx]
@@ -319,6 +343,7 @@ class MIArgs:
             dbshape=args["dbshape"],
             warmup=args["warmup"],
             cpu=args["cpu"],
+            save_db=args["save_db"],
             in_data_type=in_data_type
         )
 
