@@ -7,6 +7,10 @@ import time
 import threading
 from scipy.stats import wasserstein_distance
 
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import args_2_shape
+
 database_lock = threading.Lock()
 # Global thread-safe file handler instances
 _file_handlers = {}
@@ -122,41 +126,42 @@ class ThreadSafeJSONFile:
             except OSError:
                 pass
 
-def generate_shape_key(shape_info):
+def generate_shape_key(shape_info, is_solver=False):
     """Generate a unique key for shape configuration"""
     if not shape_info:
         return None
     
-    shape_key = {}
-    shape_key["forw"] = shape_info.forw
-    shape_key["batchsize"] = shape_info.batchsize
-    shape_key["in_channels"] = shape_info.in_channels
-    shape_key["in_h"] = shape_info.in_h
-    shape_key["in_w"] = shape_info.in_w
-    shape_key["in_d"] = shape_info.in_d
-    shape_key["out_channels"] = shape_info.out_channels
-    shape_key["fil_h"] = shape_info.fil_h
-    shape_key["fil_w"] = shape_info.fil_w
-    shape_key["fil_d"] = shape_info.fil_d
-    shape_key["pad_h"] = shape_info.pad_h
-    shape_key["pad_w"] = shape_info.pad_w
-    shape_key["pad_d"] = shape_info.pad_d
-    shape_key["stride_h"] = shape_info.conv_stride_h
-    shape_key["stride_w"] = shape_info.conv_stride_w
-    shape_key["stride_d"] = shape_info.conv_stride_d
-    shape_key["dilation_h"] = shape_info.dilation_h
-    shape_key["dilation_w"] = shape_info.dilation_w
-    shape_key["dilation_d"] = shape_info.dilation_d
-    shape_key["group_count"] = shape_info.group_count
-    shape_key["spatial_dim"] = shape_info.spatial_dim
+    result = args_2_shape.Solve(None, is_solver, shape_info)
+    # shape_key = {}
+    # shape_key["forw"] = shape_info.forw
+    # shape_key["batchsize"] = shape_info.batchsize
+    # shape_key["in_channels"] = shape_info.in_channels
+    # shape_key["in_h"] = shape_info.in_h
+    # shape_key["in_w"] = shape_info.in_w
+    # shape_key["in_d"] = shape_info.in_d
+    # shape_key["out_channels"] = shape_info.out_channels
+    # shape_key["fil_h"] = shape_info.fil_h
+    # shape_key["fil_w"] = shape_info.fil_w
+    # shape_key["fil_d"] = shape_info.fil_d
+    # shape_key["pad_h"] = shape_info.pad_h
+    # shape_key["pad_w"] = shape_info.pad_w
+    # shape_key["pad_d"] = shape_info.pad_d
+    # shape_key["stride_h"] = shape_info.conv_stride_h
+    # shape_key["stride_w"] = shape_info.conv_stride_w
+    # shape_key["stride_d"] = shape_info.conv_stride_d
+    # shape_key["dilation_h"] = shape_info.dilation_h
+    # shape_key["dilation_w"] = shape_info.dilation_w
+    # shape_key["dilation_d"] = shape_info.dilation_d
+    # shape_key["group_count"] = shape_info.group_count
+    # shape_key["spatial_dim"] = shape_info.spatial_dim
     
-    # Create key string from non-None values
-    key_string = "|".join([
-        f"{k}:{v}" for k, v in shape_key.items() if v is not None
-    ])
+    # # Create key string from non-None values
+    # key_string = "|".join([
+    #     f"{k}:{v}" for k, v in shape_key.items() if v is not None
+    # ])
     
-    key_string_hash = hashlib.sha256(key_string.encode('utf-8')).hexdigest()[:16]
-    result = {key_string_hash: {"shape": shape_key}}
+    # key_string_hash = hashlib.sha256(key_string.encode('utf-8')).hexdigest()[:16]
+    # result = {key_string_hash: {"shape": shape_key}}
     
     return result
 
@@ -268,28 +273,26 @@ def compare_stats(golden_stats, test_stats, tolerance=0.05):
     max_error = max(channel_errors) if channel_errors else 0.0
     return max_error <= tolerance, max_error, channel_errors
 
-def load_golden_stats_from_memory(shape_dict, database, need_lock = 0):
+def load_golden_stats_from_memory(shape_key, database, need_lock = 0):
     """Thread-safe load from in-memory database"""
     try:
-        if shape_dict is None:
+        if shape_key is None:
             return False, None
         
         # Check if shape_dict is actually a dictionary
-        if not isinstance(shape_dict, dict) or not isinstance(database, dict):
-            print(f"Error: shape_dict or database is not a dictionary, got {type(shape_dict)}, got {type(database)}")
+        if not isinstance(database, dict):
+            print(f"Error: database is not a dictionary, got {type(database)}")
             return False, None
-        
-        shape_hash_key = list(shape_dict.keys())[0]
         
         if need_lock:
             with database_lock:
-                if shape_hash_key in database:
-                    entry = database[shape_hash_key]
+                if shape_key in database:
+                    entry = database[shape_key]
                     if "stats" in entry:
                         return True, entry["stats"]
         else:
-            if shape_hash_key in database:
-                entry = database[shape_hash_key]
+            if shape_key in database:
+                entry = database[shape_key]
                 if "stats" in entry:
                     return True, entry["stats"]
         
@@ -299,22 +302,18 @@ def load_golden_stats_from_memory(shape_dict, database, need_lock = 0):
         print(f"Error loading from memory database: {e}")
         return False, None
 
-def save_golden_stats_to_memory(stats, shape_dict, database):
+def save_golden_stats_to_memory(stats, shape_key, database):
     """Thread-safe save to in-memory database"""
     try:
-        if stats is None or not shape_dict or not isinstance(shape_dict, dict) or not isinstance(database, dict):
-            print(f"Error: shape_dict or database is not a dictionary, got {type(shape_dict)}, got {type(database)}")
+        if stats is None or not shape_key or not isinstance(database, dict):
+            print(f"Error: database is not a dictionary, got {type(database)}")
             return
         
-        hash_key = list(shape_dict.keys())[0]
-        shape_info = shape_dict[hash_key].get("shape", {})
-        
         with database_lock:
-            if hash_key not in database:
-                database[hash_key] = {}
+            if shape_key not in database:
+                database[shape_key] = {}
             
-            database[hash_key]["shape"] = shape_info
-            database[hash_key]["stats"] = stats
+            database[shape_key]["stats"] = stats
         
     except Exception as e:
         print(f"Error saving to memory database: {e}")

@@ -29,13 +29,12 @@ def safe_print(*args, **kwargs):
         print(*args, **kwargs)
 
 def generate_fixed_seed_input(shape, dtype, device, verify=False):
-
     if verify:
         torch.manual_seed(12345678)
         # Create separate generator with fixed seed
-        input_data = (2 * torch.randn(shape, dtype=dtype, device="cpu", requires_grad=True) - 1)
-        if device.type == 'cuda':
-            input_data = input_data.to(device)
+        input_data = torch.randn(shape, dtype=dtype, device=device, requires_grad=True)
+        # if device.type == 'cuda':
+        #     input_data = input_data.to(device)
     else:
         # Use the default random generator
         input_data = torch.randn(shape, dtype=dtype, device=device, requires_grad=True)
@@ -373,16 +372,17 @@ def RunConv(device, args, in_data_type, golden_database, gpu_idx, test_idx=0):
             elapsed_time_ms = (end_time - start_time) * 1000
 
         # verify gpu result
-        args.verify = 0
+        args.save_db = 0
         if (args.verify):
             # Check if the current shape is already in the database
             # Generate shape key
-            shape_dict = DataHash.generate_shape_key(args)
+            shape_key = DataHash.generate_shape_key(args)
         
-            exist, golden_stats = DataHash.load_golden_stats_from_memory(shape_dict, golden_database, need_lock = args.save_db)
+            exist, golden_stats = DataHash.load_golden_stats_from_memory(shape_key, golden_database, need_lock = args.save_db)
         
             # Current shape golden is not exist, so need to compute golden
             if not exist:
+                # print("not exist")
                 golden_result = None
                 if device.type == 'cuda':
                     with torch.cuda.stream(stream):
@@ -392,9 +392,9 @@ def RunConv(device, args, in_data_type, golden_database, gpu_idx, test_idx=0):
                     golden_result = run_convolution(forw)
                     
                 golden_stats = DataHash.summarize_conv_output(golden_result, include_histogram=False, bins=6)
-                
+                # print(f"save_db{args.save_db}")
                 if args.save_db:
-                    DataHash.save_golden_stats_to_memory(golden_stats, shape_dict, golden_database)
+                    DataHash.save_golden_stats_to_memory(golden_stats, shape_key, golden_database)
             
             stats = DataHash.summarize_conv_output(result, include_histogram=False, bins=6)
             # print(f"Convolution result shape: {result.shape}")
@@ -414,14 +414,14 @@ def RunConv(device, args, in_data_type, golden_database, gpu_idx, test_idx=0):
         # PrintStat.print_stats(args, input_tensor, weight, grad_output, test_idx, elapsed_time_ms)
             
         
-    # Print results
+    # # Print results
     op_names = {
         1: "FWD",
         2: "BWD Data",
         4: "BWD Weight"
     }
-    print(f"op_names[forw]:{op_names[forw]}")
-    operations_str = ", ".join(op_names[forw])
+    print(f"Test {test_idx}, op_names[forw]:{op_names[forw]}")
+    # operations_str = ", ".join(op_names[forw])
 
 def ParseRunList(file_path):
     convRunList = []
@@ -487,7 +487,7 @@ def Solve():
             dev = devices[args.gpu] if args.gpu < num_gpus else devices[0]
         RunConv(dev, args, args.in_data_type, golden_database, args.gpu)
 
-    # Store golden database
+    # Store golden database``
     DataHash.save_golden_stats_to_file(golden_database, golden_database_file)
 
 def main():

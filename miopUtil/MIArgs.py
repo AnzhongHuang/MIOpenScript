@@ -325,6 +325,7 @@ class MIArgs:
             dbshape=args["dbshape"],
             warmup=args["warmup"],
             cpu=args["cpu"],
+            save_db=args["save_db"],
             in_data_type=in_data_type
         )
 

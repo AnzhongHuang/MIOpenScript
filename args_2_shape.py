@@ -12,10 +12,11 @@ import miopUtil.shapeConvert as shapeConvert
 from miopUtil.shapeConvert import MiopenDataType
 from miopUtil.MIArgs import MIArgs
 
-def Solve(argvs, is_solver=False):
+def Solve(argvs, is_solver=False, args=None):
     seri = ""
-    # Parse command name to determine data type
-    args = MIArgs.ParseParam(argvs[1:])
+    # Parse command name to determine data type when args is none
+    if not args:
+        args = MIArgs.ParseParam(argvs[1:])
     if is_solver:
         args.shapeformat = 'solver'
 
