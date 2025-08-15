@@ -198,20 +198,19 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
     if args.in_bias:
         cmd += f" -a {args.in_bias}"
 
+    # Common convolution parameters
+    conv_args = {
+        'stride': (args.conv_stride_d, args.conv_stride_h, args.conv_stride_w) if is_3d else 
+                 (args.conv_stride_h, args.conv_stride_w),
+        'padding': (args.pad_d, args.pad_h, args.pad_w) if is_3d else 
+                  (args.pad_h, args.pad_w),
+        'dilation': (args.dilation_d, args.dilation_h, args.dilation_w) if is_3d else 
+                   (args.dilation_h, args.dilation_w),
+        'groups': args.group_count
+    }
+
     # Wrapper function for convolution operations
     def run_convolution(operation):
-        with record_function(f"convolution_{operation}"):
-            # Common convolution parameters
-            conv_args = {
-                'stride': (args.conv_stride_d, args.conv_stride_h, args.conv_stride_w) if is_3d else 
-                         (args.conv_stride_h, args.conv_stride_w),
-                'padding': (args.pad_d, args.pad_h, args.pad_w) if is_3d else 
-                          (args.pad_h, args.pad_w),
-                'dilation': (args.dilation_d, args.dilation_h, args.dilation_w) if is_3d else 
-                           (args.dilation_h, args.dilation_w),
-                'groups': args.group_count
-            }
-
             if operation == 1:  # Forward convolution
                 result = conv_fn(input_tensor, weight, bias, **conv_args)
                 return result
@@ -251,6 +250,9 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
                 )
 
                 return grad_weight
+            
+            else:
+                print(f"Invalid operation: {operation}")
 
     forw = args.forw
 
@@ -262,6 +264,9 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
             if args.warmup > 0:
                 for _ in range(args.warmup):
                     result = run_convolution(forw)
+
+    elapsed_time_ms = 0
+    result = None
 
     # Configure profiler if trace is requested
     if args.trace or args.event:
@@ -285,9 +290,16 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
             with_stack=False,
             with_flops=True
         ) as prof:
-
-            for _ in range(args.iter):
-                result = run_convolution(forw)
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event =   torch.cuda.Event(enable_timing=True)
+            with torch.cuda.stream(stream):
+                start_event.record()
+                for _ in range(args.iter):
+                    with record_function(f"convolution_{forw}"):
+                        result = run_convolution(forw)
+                end_event.record()
+                stream.synchronize()
+            elapsed_time_ms = start_event.elapsed_time(end_event)
 
             torch.cuda.synchronize()
         # Save trace
@@ -303,27 +315,24 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
             print(events)
             print(f"Events have been written to {event_path}")
     else:
-        start_event = [torch.cuda.Event(enable_timing=True) for _ in range(args.iter)]
-        end_event =   [torch.cuda.Event(enable_timing=True) for _ in range(args.iter)]
-
-        elapsed_time_ms = 0
-        result = None
         if device.type == 'cuda':
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event =   torch.cuda.Event(enable_timing=True)
             with torch.cuda.stream(stream):
-                start_event[0].record()
+                start_event.record()
                 for _ in range(args.iter):
                     result = run_convolution(forw)
-                end_event[0].record()
+                end_event.record()
                 stream.synchronize()
-            elapsed_time_ms = start_event[0].elapsed_time(end_event[0])
+            elapsed_time_ms = start_event.elapsed_time(end_event)
 
         else:
             # CPU time measurement
-            start_time = time.time()
+            start_time = time.perf_counter()
             args.iter = 1
             for _ in range(args.iter):
                 result = run_convolution(forw)
-            end_time = time.time()
+            end_time = time.perf_counter()
             elapsed_time_ms = (end_time - start_time) * 1000
 
         if (args.verify):
@@ -341,8 +350,8 @@ def RunConv(device, args, in_data_type, gpu_idx, test_idx=0):
                     print(f"Conv Verify FAILED: {max_error} >= {tolerance}")
             DataHash.save_golden_stats(status, "conv_output_stats.json")
 
-        # The elapsed time is bigger than kernel execution time
-        safe_print(f"Test {test_idx}, GPU {gpu_idx} - execution time: {elapsed_time_ms/(args.iter):.4f} ms")
+    # The elapsed time is bigger than kernel execution time
+    safe_print(f"Test {test_idx}, GPU {gpu_idx} - execution time: {elapsed_time_ms/(args.iter):.4f} ms")
 
     # Print results
     op_names = {
