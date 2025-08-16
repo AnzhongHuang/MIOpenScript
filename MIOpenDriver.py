@@ -290,9 +290,6 @@ class ConvolutionRunner:
         return result
     
     def verify_result(self, result):
-        if not self.args.verify:
-            return
-        
         shape_key = DataHash.generate_shape_key(self.args)
         
         self.args.save_db = 0
@@ -329,9 +326,7 @@ class ConvolutionRunner:
         if self.args.search:
             torch.backends.cudnn.benchmark = True
         
-        result = self.run_with_profiling()
-        
-        return self.verify_result(result)
+        return self.run_with_profiling()
     
     def _run_dbshape_test(self):
         import miopUtil.shapeConvert as shapeConvert
@@ -450,11 +445,14 @@ class ConvolutionManager:
         runner = None
         try:
             runner = ConvolutionRunner(device, args, in_data_type, self.golden_database, gpu_idx, test_idx)
-            is_validate_pass, max_error, channel_error = runner.run()
-            
-            self.is_validate_pass = is_validate_pass
-            self.max_error = max_error
-            
+            result = runner.run()
+
+            if args.verify:
+                is_validate_pass, max_error, channel_error = runner.verify_result(result)
+
+                self.is_validate_pass = is_validate_pass
+                self.max_error = max_error
+
             with database_lock:
                 self.execution_stats['successful_tests'] += 1
                 self.execution_stats['gpu_time'] += (runner.execution_time)
