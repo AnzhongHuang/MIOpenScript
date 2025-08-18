@@ -37,7 +37,6 @@ class ConvolutionRunner:
         
     def _setup_device(self):
         if self.device.type == 'cuda':
-            torch.cuda.set_device(self.device)
             self.stream = torch.cuda.Stream(device=self.device)
         else:
             self.stream = None
@@ -132,6 +131,10 @@ class ConvolutionRunner:
     def _generate_fixed_seed_input(self, shape):
         if self.args.verify:
             torch.manual_seed(12345678)
+            # Create separate generator with fixed seed
+            input_data = (2 * torch.randn(shape, dtype=dtype, device="cpu", requires_grad=True) - 1)
+            if self.device.type == 'cuda':
+                input_data = input_data.to(self.device)
         
         input_data = torch.randn(shape, dtype=self.dtype, device=self.device, requires_grad=True)
         return input_data
