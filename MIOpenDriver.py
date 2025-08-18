@@ -132,7 +132,7 @@ class ConvolutionRunner:
         if self.args.verify:
             torch.manual_seed(12345678)
             # Create separate generator with fixed seed
-            input_data = (2 * torch.randn(shape, dtype=dtype, device="cpu", requires_grad=True) - 1)
+            input_data = (2 * torch.randn(shape, dtype=self.dtype, device="cpu", requires_grad=True) - 1)
             if self.device.type == 'cuda':
                 input_data = input_data.to(self.device)
         
