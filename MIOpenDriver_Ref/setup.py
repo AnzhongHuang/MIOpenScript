@@ -11,7 +11,7 @@ ext_modules = [
     CppExtension(
         name='MIOpenDriver_Ref',
         sources=[
-            '/mnt/workspace/ytn/docker_path/MIOpenScript/MIOpenDriver_Ref/MIOpenDriver_Ref.cpp',
+            'MIOpenDriver_Ref.cpp',
         ],
         include_dirs=[
             # PyTorch includes

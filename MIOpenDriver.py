@@ -32,6 +32,7 @@ class ConvolutionRunner:
         self._setup_data_type()
         self._setup_dimensions()
         self._setup_tensors()
+        self.conv_args = self._get_conv_args()
         
         self.creation_time = 0
         self.execution_time = 0
@@ -152,68 +153,65 @@ class ConvolutionRunner:
         }
     
     def run_convolution(self, operation):
-        with record_function(f"convolution_{operation}"):
-            conv_args = self._get_conv_args()
+        if operation == 1:  # Forward convolution
+            result = self.conv_fn(self.input_tensor, self.weight, self.bias, **self.conv_args)
+            return result
 
-            if operation == 1:  # Forward convolution
-                result = self.conv_fn(self.input_tensor, self.weight, self.bias, **conv_args)
-                return result
+        elif operation == 2:  # Backward data
+            output_mask = [True, False, False]
+            grad_input, _, _ = torch.ops.aten.convolution_backward(
+                grad_output=self.grad_output,
+                input=self.input_tensor,
+                weight=self.weight,
+                bias_sizes=[0],
+                stride=self.conv_args['stride'],
+                padding=self.conv_args['padding'],
+                dilation=self.conv_args['dilation'],
+                transposed=False,
+                output_padding=(0, 0, 0) if self.is_3d else (0, 0),
+                groups=self.conv_args['groups'],
+                output_mask=output_mask
+            )
+            return grad_input
 
-            elif operation == 2:  # Backward data
-                output_mask = [True, False, False]
-                grad_input, _, _ = torch.ops.aten.convolution_backward(
-                    grad_output=self.grad_output,
-                    input=self.input_tensor,
-                    weight=self.weight,
-                    bias_sizes=[0],
-                    stride=conv_args['stride'],
-                    padding=conv_args['padding'],
-                    dilation=conv_args['dilation'],
-                    transposed=False,
-                    output_padding=(0, 0, 0) if self.is_3d else (0, 0),
-                    groups=conv_args['groups'],
-                    output_mask=output_mask
-                )
-                return grad_input
+        elif operation == 4:  # Backward weight
+            output_mask = [False, True, False]
+            _, grad_weight, _ = torch.ops.aten.convolution_backward(
+                grad_output=self.grad_output,
+                input=self.input_tensor,
+                weight=self.weight,
+                bias_sizes=[0],
+                stride=self.conv_args['stride'],
+                padding=self.conv_args['padding'],
+                dilation=self.conv_args['dilation'],
+                transposed=False,
+                output_padding=(0, 0, 0) if self.is_3d else (0, 0),
+                groups=self.conv_args['groups'],
+                output_mask=output_mask
+            )
+            return grad_weight
 
-            elif operation == 4:  # Backward weight
-                output_mask = [False, True, False]
-                _, grad_weight, _ = torch.ops.aten.convolution_backward(
-                    grad_output=self.grad_output,
-                    input=self.input_tensor,
-                    weight=self.weight,
-                    bias_sizes=[0],
-                    stride=conv_args['stride'],
-                    padding=conv_args['padding'],
-                    dilation=conv_args['dilation'],
-                    transposed=False,
-                    output_padding=(0, 0, 0) if self.is_3d else (0, 0),
-                    groups=conv_args['groups'],
-                    output_mask=output_mask
-                )
-                return grad_weight
+        else:
+            print(f"Invalid operation: {operation}")
     
     def run_convolution_ref(self, operation):
-        with record_function(f"convolution_ref_{operation}"):
-            conv_args = self._get_conv_args()
-            
-            reference = MIOpenDriver_Ref.gpu_convolution_reference(
-                grad_output=self.grad_output,
-                weight=self.weight,
-                input=self.input_tensor,
-                padding=conv_args['padding'][0],
-                stride=conv_args['stride'][0],
-                dilation=conv_args['dilation'][0],
-                group=conv_args['groups'],
-                solution_id=86,
-                operation=operation,
-                type=self.data_type_str
-            )
-            
-            if reference is None:
-                print("Error: Reference result is None")
-            
-            return reference
+        reference = MIOpenDriver_Ref.gpu_convolution_reference(
+            grad_output=self.grad_output,
+            weight=self.weight,
+            input=self.input_tensor,
+            padding=self.conv_args['padding'][0],
+            stride=self.conv_args['stride'][0],
+            dilation=self.conv_args['dilation'][0],
+            group=self.conv_args['groups'],
+            solution_id=86,
+            operation=operation,
+            type=self.data_type_str
+        )
+        
+        if reference is None:
+            print("Error: Reference result is None")
+        
+        return reference
     
     def warmup(self):
         if self.args.warmup > 0:
@@ -242,8 +240,16 @@ class ConvolutionRunner:
             with_stack=False,
             with_flops=True
         ) as prof:
-            for _ in range(self.args.iter):
-                result = self.run_convolution(self.args.forw)
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+            with torch.cuda.stream(self.stream):
+                start_event.record()
+                for _ in range(self.args.iter):
+                    with record_function(f"convolution_{self.args.forw}"):
+                        result = self.run_convolution(self.args.forw)
+                end_event.record()
+                self.stream.synchronize()
+            self.execution_time = start_event.elapsed_time(end_event) / self.args.iter
             
             if self.device.type == 'cuda':
                 torch.cuda.synchronize()
@@ -265,25 +271,24 @@ class ConvolutionRunner:
         return result
     
     def _run_with_timing(self):
-        start_event = [torch.cuda.Event(enable_timing=True) for _ in range(self.args.iter)]
-        end_event = [torch.cuda.Event(enable_timing=True) for _ in range(self.args.iter)]
-        
         result = None
         
         if self.device.type == 'cuda':
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event =   torch.cuda.Event(enable_timing=True)
             with torch.cuda.stream(self.stream):
-                start_event[0].record()
+                start_event.record()
                 for _ in range(self.args.iter):
                     result = self.run_convolution(self.args.forw)
-                end_event[0].record()
+                end_event.record()
                 self.stream.synchronize()
-            self.execution_time = start_event[0].elapsed_time(end_event[0]) / self.args.iter
+            self.execution_time = start_event.elapsed_time(end_event) / self.args.iter
         else:
-            start_time = time.time()
+            start_time = time.perf_counter()
             self.args.iter = 1
             for _ in range(self.args.iter):
                 result = self.run_convolution(self.args.forw)
-            end_time = time.time()
+            end_time = time.perf_counter()
             self.execution_time = ((end_time - start_time) * 1000) / self.args.iter
         
         return result
