@@ -559,7 +559,7 @@ class ConvolutionManager:
 def Solve():
     start_time = time.time()
     
-    file_input = "--input" in sys.argv[1]
+    test_list = "--test_list" in sys.argv[1]
     if torch.cuda.is_available():
         num_gpus = torch.cuda.device_count()
     else:
@@ -576,8 +576,9 @@ def Solve():
     runners = []
     
     try:
-        if file_input:
-            conv_run_list = ParseRunList(sys.argv[2])
+        if test_list:
+            global_args = MIArgs.ParseGlobalParam(sys.argv[3:])
+            conv_run_list = ParseRunList(sys.argv[2], global_args)
             print(f"Parsed {len(conv_run_list)} commands from input file")
             
             manager.execution_stats['total_tests'] = len(conv_run_list)

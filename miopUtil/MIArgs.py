@@ -69,7 +69,9 @@ FLAG_MAPPING = {
     '--dbshape': 'dbshape',
     '--warmup': 'warmup',
     '--cpu' : 'cpu',
-    '--save_db': "save_db"
+    '--save_db': 'save_db',
+    '--sync': 'sync', # 0 is default, indicates CPU does not nned to wait for GPU idle immediately
+    '--mthread': 'mthread' # run test with multiple CPU threads
 }
 
 CONVERTERS = {
@@ -84,7 +86,8 @@ CONVERTERS = {
     'mode': str, 'in_data': str, 'weights': str, 'dout_data': str, 'in_bias': str,
     'pad_mode': str, 'fil_layout': str, 'in_layout': str, 'out_layout': str,
     'verification_cache': str, 'shapeformat': str, 'trace': str, 'event': str,
-    'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int, 'gpualloc': int, 'save_db': int
+    'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int, 'gpualloc': int, 'save_db': int,
+    'test_list': str, 'sync': int, 'mthread': int
 }
 
 class MiopenDataType(Enum):
@@ -122,7 +125,8 @@ def get_direction_str(forw):
     else:
         return "unknown"
 
-def ParseRunList(file_path):
+    return convRunList
+def ParseRunList(file_path, global_args):
     convRunList = []
     with open(file_path, 'r') as file:
         lines = file.readlines()
@@ -133,6 +137,10 @@ def ParseRunList(file_path):
             try:
                 args_list = shlex.split(command_line)
                 args = MIArgs.ParseParam(args_list[1:])
+                args.verify = global_args.verify
+                args.iter   = global_args.iter
+                args.warmup = global_args.warmup
+                args.sync   = global_args.sync
                 convRunList.append((args, args.in_data_type))
 
             except Exception as e:
@@ -143,11 +151,11 @@ def ParseRunList(file_path):
 @dataclass
 class MIArgs:
     # shape param
-    forw: int
-    batchsize: int
-    in_channels: int
-    in_h: int
-    in_w: int
+    forw: int = 1
+    batchsize: int = 1
+    in_channels: int = 1
+    in_h: int = 1
+    in_w: int = 1
     in_d: int = 1
     out_channels: int = 0
     fil_h: int = 0
@@ -201,24 +209,12 @@ class MIArgs:
     in_data_type: MiopenDataType = MiopenDataType.miopenHalf
     shapeformat: str = 'vs'
 
-    @staticmethod
-    def ParseParam(args_list):
-        command_name = args_list[0] if len(args_list) > 1 else "conv"
-        if "bfp16" in command_name.lower():
-            in_data_type = MiopenDataType.miopenBFloat16
-        elif "fp16" in command_name.lower():
-            in_data_type = MiopenDataType.miopenHalf
-        elif "int8" in command_name.lower():
-            in_data_type = MiopenDataType.miopenInt8
-        elif "conv" == command_name.lower():
-            in_data_type = MiopenDataType.miopenFloat
-        elif "fp64" in command_name.lower():
-            in_data_type = MiopenDataType.miopenDouble
-        else:
-            print(f"Unknown {command_name} in command name: {args_list}")
+    sync : int = 0 # do not wait for GPU idle immediately
+    mthread: int = 1
 
+    @staticmethod
+    def InitArgs():
         args={}
-        idx = 1
 
         # default value
         args['in_d']=1
@@ -264,7 +260,29 @@ class MIArgs:
         args['warmup'] = 3
         args['cpu'] = 0  # Use CPU for verification
         args['save_db'] = 0 # Should the metadata of the current shape be saved to the database
-        
+        args['sync'] = 0
+        args['mthread'] = 1
+        return args
+
+    @staticmethod
+    def ParseParam(args_list):
+        command_name = args_list[0] if len(args_list) > 1 else "conv"
+        if "bfp16" in command_name.lower():
+            in_data_type = MiopenDataType.miopenBFloat16
+        elif "fp16" in command_name.lower():
+            in_data_type = MiopenDataType.miopenHalf
+        elif "int8" in command_name.lower():
+            in_data_type = MiopenDataType.miopenInt8
+        elif "conv" == command_name.lower():
+            in_data_type = MiopenDataType.miopenFloat
+        elif "fp64" in command_name.lower():
+            in_data_type = MiopenDataType.miopenDouble
+        else:
+            print(f"Unknown {command_name} in command name: {args_list}")
+
+        args=MIArgs.InitArgs()
+        idx = 1
+
         while idx < len(args_list):
             if args_list[idx].startswith('-'):
                 key = args_list[idx]
@@ -345,6 +363,42 @@ class MIArgs:
             cpu=args["cpu"],
             save_db=args["save_db"],
             in_data_type=in_data_type
+        )
+
+        return miargs
+
+    @staticmethod
+    def ParseGlobalParam(args_list):
+        args=MIArgs.InitArgs()
+        idx = 0
+
+        while idx < len(args_list):
+            if args_list[idx].startswith('-'):
+                key = args_list[idx]
+                value = args_list[idx + 1]
+
+                norm_name = FLAG_MAPPING.get(key)
+                convert = CONVERTERS.get(norm_name, str)
+                args[norm_name] = convert(value)
+                idx += 1
+
+            idx += 1
+
+        miargs = MIArgs(
+            time=args["time"],
+            verify=args["verify"],
+            iter=args["iter"],
+            search=args["search"],
+
+            # private fields
+            trace=args["trace"],
+            event=args["event"],
+            gpu=args["gpu"],
+            warmup=args["warmup"],
+            cpu=args["cpu"],
+            save_db=args["save_db"],
+            sync=args["sync"],
+            mthread=args["mthread"]
         )
 
         return miargs
