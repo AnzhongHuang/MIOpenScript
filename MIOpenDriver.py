@@ -16,6 +16,7 @@ import MIOpenDriver_Ref
 import miopUtil.DataHash as DataHash
 import miopUtil.PrintStat as PrintStat
 import threading
+from datetime import datetime, timezone
 
 database_lock = threading.Lock()
 class ConvolutionRunner:
@@ -222,13 +223,8 @@ class ConvolutionRunner:
                         self.run_convolution(self.args.forw)
     
     def run_with_profiling(self):
-        trace_name = f"conv{self.data_type_str}-F{self.args.forw}-n{self.args.batchsize}-c{self.args.in_channels}"
-        
-        if self.args.trace or self.args.event:
-            return self._run_with_trace(trace_name)
-        else:
-            return self._run_with_timing()
-    
+        return self._run_with_timing()
+
     def _run_with_trace(self, trace_name):
         prefix = self.args.trace.split(".")[0] if self.args.trace else self.args.event.split(".")[0]
         trace_path = f"{prefix}_{trace_name}.json"
@@ -498,17 +494,20 @@ class ConvolutionManager:
                         runner = future.result()
                     
                     results.append(runner)
-                    
+
                     if runner:
-                        print(f"✓ Test {test_idx} successfully on GPU {gpu_idx}, Verify {self.is_validate_pass}: ({self.max_error} < {self.tolerance}), execution time: {runner.execution_time:.4f} ms")
+                        if self.is_validate_pass == False and self.max_error == 0:
+                            print(f"Test {test_idx} pass on GPU {gpu_idx}, execution time: {runner.execution_time:.4f} ms")
+                        else:
+                            print(f"Test {test_idx} pass on GPU {gpu_idx}, Verify {self.is_validate_pass}: ({self.max_error} < {self.tolerance}), execution time: {runner.execution_time:.4f} ms")
                     else:
-                        print(f"✗ Test {test_idx} failed on GPU {gpu_idx}")
+                        print(f"Test {test_idx} failed on GPU {gpu_idx}")
                         
                 except concurrent.futures.TimeoutError:
-                    print(f"✗ Test {test_idx} timed out on GPU {gpu_idx}")
+                    print(f"Test {test_idx} timed out on GPU {gpu_idx}")
                     results.append(None)
                 except Exception as e:
-                    print(f"✗ Test {test_idx} failed with exception: {e}")
+                    print(f"Test {test_idx} failed with exception: {e}")
                     results.append(None)
         
         return results
@@ -559,28 +558,12 @@ class ConvolutionManager:
         
         print("="*50)
 
-def Solve():
-    start_time = time.time()
-    
-    test_list = "--test_list" in sys.argv[1]
-    if torch.cuda.is_available():
-        num_gpus = torch.cuda.device_count()
-    else:
-        num_gpus = 20
-    
-    config = ExecutionConfig(
-        num_gpus=num_gpus,
-        max_workers=min(num_gpus, 8),
-        enable_profiling=any('--trace' in arg or '--event' in arg for arg in sys.argv),
-        timeout=300.0
-    )
-    
-    manager = ConvolutionManager(config)
+def RunConvlutions(manager, global_args=None):
     runners = []
-    
+    start_time = time.time()
+
     try:
-        if test_list:
-            global_args = MIArgs.ParseGlobalParam(sys.argv[3:])
+        if global_args:
             conv_run_list = ParseRunList(sys.argv[2], global_args)
             print(f"Parsed {len(conv_run_list)} commands from input file")
             
@@ -604,7 +587,7 @@ def Solve():
                 device, args, args.in_data_type, gpu_idx, 1
             )
             runners = [runner] if runner else []
-    
+
     finally:
         end_time = time.time()
         manager.execution_stats['total_time'] = (end_time - start_time) * 1000
@@ -615,6 +598,66 @@ def Solve():
         
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+def WriteProf(prof, args):
+    prefix = args.trace.split(".")[0]
+    trace_name = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    trace_path = f"{prefix}_{trace_name}.json"
+    trace_path = os.path.abspath(trace_path)
+    trace_dir = os.path.dirname(trace_path)
+    if trace_dir and not os.path.exists(trace_dir):
+        os.makedirs(trace_dir)
+
+    prefix = args.event.split(".")[0]
+    event_path = f"{prefix}_{trace_name}_event.json"
+    event_path = os.path.abspath(event_path)
+
+    # Save trace
+    if (args.trace):
+        prof.export_chrome_trace(trace_path)
+        print(f"PyTorch trace saved to {trace_path}")
+    if (args.event):
+        events = prof.key_averages(group_by_input_shape=False).table(
+            sort_by="self_cuda_time_total", row_limit=120
+        )
+        with open(event_path, "w") as file:
+            file.write(events)
+        print(events)
+        print(f"Events have been written to {event_path}")
+
+def Solve():
+    multiple_tests = "--test_list" in sys.argv[1]
+    global_args=None
+    if multiple_tests:
+        global_args = MIArgs.ParseGlobalParam(sys.argv[3:])
+
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+    else:
+        num_gpus = 20
+
+    config = ExecutionConfig(
+        num_gpus=num_gpus,
+        max_workers=min(num_gpus, 8),
+        enable_profiling=global_args.trace or global_args.event,
+        timeout=300.0
+    )
+
+    manager = ConvolutionManager(config)
+
+    if (config.enable_profiling):
+        with profile(
+            activities=[ProfilerActivity.CUDA, ProfilerActivity.CPU],
+            record_shapes=True,
+            with_stack=True,
+            with_flops=True
+        ) as prof:
+            print("pytorch profile enabled!")
+            RunConvlutions(manager=manager, global_args=global_args)
+
+        WriteProf(prof=prof, args=global_args)
+    else:
+        RunConvlutions(manager=manager, global_args=global_args)
 
 def main():
     try:
