@@ -37,7 +37,7 @@ class ROCmPerfettoMonitor:
 
         self.gpu_data = defaultdict(lambda: {
             'utilization': [],
-            'memory_busy': [],
+            'mem_usage': [],
             'timestamps' : []
         })
         self.gpu_total_usage = [0] * self.gpu_count
@@ -76,9 +76,9 @@ class ROCmPerfettoMonitor:
             # Record GPU data
             for device_id in range(self.gpu_count):
                 util = rocml.smi_get_device_utilization(device_id)
-                # mem_busy = rocml.smi_get_device_memory_busy(device_id)
+                mem_usage = rocml.smi_get_device_memory_used(device_id)
                 self.gpu_data[device_id]['utilization'].append(util)
-                # self.gpu_data[device_id]['memory_busy'].append(mem_busy)
+                self.gpu_data[device_id]['mem_usage'].append(mem_usage)
                 self.gpu_data[device_id]['timestamps'].append(current_time)
                 self.gpu_total_usage[device_id] += util
 
@@ -126,20 +126,32 @@ class ROCmPerfettoMonitor:
         # Add GPU events
         gpu_trace_event = []
         for device_id in range(self.gpu_count):
-            util_list = self.gpu_data[device_id]['utilization']
-            ts_list   = self.gpu_data[device_id]['timestamps']
+            util_list       = self.gpu_data[device_id]['utilization']
+            mem_usage_list  = self.gpu_data[device_id]['mem_usage']
+            ts_list         = self.gpu_data[device_id]['timestamps']
+
+            total_mem_usage = rocml.smi_get_device_memory_total(device_id)
             count = len(util_list)
             avg_util = self.gpu_total_usage[device_id] / count if count else 0
 
-            for util, timestamp in zip(util_list, ts_list):
+            for util, mem_usage, timestamp in zip(util_list, mem_usage_list, ts_list):
                 gpu_trace_event.append({
                     "ph": "C",
                     "cat": "gc",
-                    "name": f"GPU_{device_id}: {avg_util:.1f}%",
+                    "name": f"GPU_{device_id} usage: {avg_util:.1f}%",
                     "ts": timestamp * 1e6,
                     "pid": 101 + device_id,
                     "tid": 0,
-                    "args": {"value": util}
+                    "args": {"value": util, "units": "%"}
+                })
+                gpu_trace_event.append({
+                    "ph": "C",
+                    "cat": "gc",
+                    "name": f"GPU_{device_id} mem size(GB) {total_mem_usage/1024/1024/1024:.2f}",
+                    "ts": timestamp * 1e6,
+                    "pid": 101 + device_id,
+                    "tid": 1,
+                    "args": {"value": mem_usage/total_mem_usage * 100, "units": "%"}
                 })
 
         # Add GPU counter events
