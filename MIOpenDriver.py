@@ -15,10 +15,12 @@ from miopUtil.MIArgs import *
 import MIOpenDriver_Ref
 import miopUtil.DataHash as DataHash
 import miopUtil.PrintStat as PrintStat
+from GenTrace import ROCmPerfettoMonitor
 import threading
 from datetime import datetime, timezone
 
 database_lock = threading.Lock()
+monitor=None
 class ConvolutionRunner:
     def __init__(self, device, args, in_data_type, golden_database, gpu_idx, test_idx=0):
         self.device = device
@@ -172,6 +174,7 @@ class ConvolutionRunner:
                 groups=self.conv_args['groups'],
                 output_mask=output_mask
             )
+
             return grad_input
 
         elif operation == 4:  # Backward weight
@@ -331,7 +334,7 @@ class ConvolutionRunner:
             torch.backends.cudnn.benchmark = True
         
         return self.run_with_profiling()
-    
+
     def _run_dbshape_test(self):
         import miopUtil.shapeConvert as shapeConvert
         
@@ -371,15 +374,22 @@ class ConvolutionRunner:
         problem.InitDef()
         problem.test()
     
-    def cleanup(self):
-        if self.stream:
+    def cleanup(self, force=False):
+        if self.stream and (not force):
             self.stream.synchronize()
-        
-        del self.input_tensor
-        del self.weight
-        del self.grad_output
+
+        if self.input_tensor is not None:
+            del self.input_tensor
+            self.input_tensor = None
+        if self.weight is not None:
+            del self.weight
+            self.weight = None
+        if self.grad_output is not None:
+            del self.grad_output
+            self.grad_output = None
         if self.bias is not None:
             del self.bias
+            self.grad_output=None
         
         if self.device.type == 'cuda':
             torch.cuda.empty_cache()
@@ -446,10 +456,17 @@ class ConvolutionManager:
             print(f"Error saving golden database: {e}")
     
     def run_single_test(self, device: torch.device, args, in_data_type, gpu_idx: int, test_idx: int) -> Optional[ConvolutionRunner]:
+        global monitor
         runner = None
         try:
+            thread_id = threading.get_native_id() #threading.current_thread().ident
+            if monitor:
+                monitor.start_thread_event(thread_id, time.time(), {'test_idx': test_idx, 'gpu_idx': gpu_idx})
             runner = ConvolutionRunner(device, args, in_data_type, self.golden_database, gpu_idx, test_idx)
             result = runner.run()
+            runner.cleanup(True)
+            if monitor:
+                monitor.stop_thread_event(thread_id, time.time(), runner.execution_time)
 
             if args.verify:
                 is_validate_pass, max_error, channel_error = runner.verify_result(result)
@@ -520,7 +537,6 @@ class ConvolutionManager:
     def run_sequential_tests(self, test_list: list[tuple]) -> list[Optional[ConvolutionRunner]]:
         results = []
         print(f"Running {len(test_list)} tests in sequential mode")
-        
         for test_idx, (args, in_data_type) in enumerate(test_list, 1):
             gpu_idx = args.gpu if hasattr(args, 'gpu') else 0
             device = self.devices[min(gpu_idx, len(self.devices) - 1)]
@@ -629,8 +645,10 @@ def WriteProf(prof, args):
             file.write(events)
         print(events)
         print(f"Events have been written to {event_path}")
+    return trace_path
 
 def Solve():
+    global monitor
     multiple_tests = "--test_list" in sys.argv[1]
     global_args=None
     if multiple_tests:
@@ -650,6 +668,10 @@ def Solve():
 
     manager = ConvolutionManager(config)
 
+    if global_args.usage:
+        monitor = ROCmPerfettoMonitor()
+
+    torch_trace=None
     if (config.enable_profiling):
         with profile(
             activities=[ProfilerActivity.CUDA, ProfilerActivity.CPU],
@@ -660,9 +682,19 @@ def Solve():
             print("pytorch profile enabled!")
             RunConvlutions(manager=manager, global_args=global_args)
 
-        WriteProf(prof=prof, args=global_args)
+        torch_trace = WriteProf(prof=prof, args=global_args)
     else:
         RunConvlutions(manager=manager, global_args=global_args)
+
+    # Save the collected data to a file
+    # monitor.save(f'gpu_usage_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.html')
+    usage_trace = f"gpu_usage_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.json"
+    monitor.save_perfetto_trace(usage_trace)
+    if torch_trace:
+        ROCmPerfettoMonitor.merge_traces_with_relationships( torch_trace, usage_trace, f"merged_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.json")
+    # Shutdown the ROCm SMI
+    if monitor:
+        monitor.close()
 
 def main():
     try:

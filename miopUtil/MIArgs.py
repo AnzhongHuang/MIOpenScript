@@ -71,7 +71,8 @@ FLAG_MAPPING = {
     '--cpu' : 'cpu',
     '--save_db': 'save_db',
     '--sync': 'sync', # 0 is default, indicates CPU does not nned to wait for GPU idle immediately
-    '--mthread': 'mthread' # run test with multiple CPU threads
+    '--mthread': 'mthread', # run test with multiple CPU threads
+    '--usage': 'usage'  # show GPU usage
 }
 
 CONVERTERS = {
@@ -87,7 +88,7 @@ CONVERTERS = {
     'pad_mode': str, 'fil_layout': str, 'in_layout': str, 'out_layout': str,
     'verification_cache': str, 'shapeformat': str, 'trace': str, 'event': str,
     'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int, 'gpualloc': int, 'save_db': int,
-    'test_list': str, 'sync': int, 'mthread': int
+    'test_list': str, 'sync': int, 'mthread': int, 'usage': int
 }
 
 class MiopenDataType(Enum):
@@ -211,6 +212,7 @@ class MIArgs:
 
     sync : int = 0 # do not wait for GPU idle immediately
     mthread: int = 1
+    usage: int = 0
 
     @staticmethod
     def InitArgs():
@@ -262,6 +264,7 @@ class MIArgs:
         args['save_db'] = 0 # Should the metadata of the current shape be saved to the database
         args['sync'] = 0
         args['mthread'] = 1
+        args['usage'] = 0
         return args
 
     @staticmethod
@@ -398,7 +401,8 @@ class MIArgs:
             cpu=args["cpu"],
             save_db=args["save_db"],
             sync=args["sync"],
-            mthread=args["mthread"]
+            mthread=args["mthread"],
+            usage=args["usage"]
         )
 
         return miargs
