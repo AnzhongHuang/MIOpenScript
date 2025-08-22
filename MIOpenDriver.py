@@ -16,19 +16,87 @@ import MIOpenDriver_Ref
 import miopUtil.DataHash as DataHash
 import miopUtil.PrintStat as PrintStat
 from GenTrace import ROCmPerfettoMonitor
+from PoolMgr import PoolMgr
 import threading
 from datetime import datetime, timezone
+import traceback
+import queue
+from typing import Optional, List, Tuple
+from pathlib import Path
 
 database_lock = threading.Lock()
 monitor=None
+
+def LoadWorkload():
+    log_file = Path('workload_sort.txt')
+
+    if not log_file.is_file():
+        return None          # file missing
+
+    try:
+        pairs = []
+        for ln in log_file.read_text().splitlines():
+            ln = ln.strip()
+            if not ln or ':' not in ln:
+                continue       # skip blank / malformed lines
+            idx_s, val_s = ln.split(':', 1)
+            pairs.append((int(idx_s), float(val_s)))
+        return pairs
+    except (OSError, ValueError):
+        return None            # read or parse error
+
+class GPUWorker(threading.Thread):
+    def __init__(self,
+                 gpu_idx: int,
+                 worker_id: int,          # 0 or 1
+                 device,
+                 run_single_test_fn,
+                 timeout: Optional[float]):
+        super().__init__(daemon=True)
+        self.gpu_idx   = gpu_idx
+        self.worker_id = worker_id
+        self.device    = device
+        self.run_test  = run_single_test_fn
+        self.timeout   = timeout
+        self.queue     = queue.Queue()
+        self.results   = {}                 # test_idx -> ConvolutionRunner | None
+        self.start()
+
+    # --- API used by main thread ----------------------------------
+    def submit(self, test_idx, args, in_data_type):
+        self.queue.put((test_idx, args, in_data_type))
+
+    def shutdown(self):
+        self.queue.put(None)
+
+    # --- internal --------------------------------------------------
+    def run(self):
+        torch.cuda.set_device(self.device)
+        while True:
+            item = self.queue.get()
+            if item is None:
+                break
+            test_idx, args, in_data_type = item
+            try:
+                runner = self.run_test(
+                    self.device, args, in_data_type, self.gpu_idx, test_idx)
+                self.results[test_idx] = runner
+            except Exception as e:
+                self.results[test_idx] = None
+                print(f"Test {test_idx} failed on GPU {self.gpu_idx}-W{self.worker_id}: {e}")
+            finally:
+                self.queue.task_done()
+
+
 class ConvolutionRunner:
-    def __init__(self, device, args, in_data_type, golden_database, gpu_idx, test_idx=0):
+    def __init__(self, device, args, in_data_type, golden_database, gpu_idx, pool_mgr, test_idx=0):
         self.device = device
         self.args = args
         self.in_data_type = in_data_type
         self.golden_database = golden_database
         self.gpu_idx = gpu_idx
         self.test_idx = test_idx
+        self.pool_mgr = pool_mgr
         
         self._setup_device()
         self._setup_data_type()
@@ -89,10 +157,17 @@ class ConvolutionRunner:
         
         self._calculate_tensor_shapes()
         
-        self.input_tensor = self._create_tensor(self.input_shape, self.args.in_data)
-        self.weight = self._create_tensor(self.weight_shape, self.args.weights)
-        self.grad_output = self._create_tensor(self.grad_output_shape, self.args.dout_data)
-        
+        if self.args.pool == 0:
+            self.input_tensor = self._create_tensor(self.input_shape, self.args.in_data)
+            self.weight = self._create_tensor(self.weight_shape, self.args.weights)
+            self.grad_output = self._create_tensor(self.grad_output_shape, self.args.dout_data)
+        else:
+            # use pool
+            self.input_tensor = self.pool_mgr.get(self.input_shape, self.dtype, True, self.device, self.gpu_idx)
+            self.weight = self.pool_mgr.get(self.weight_shape, self.dtype, True, self.device, self.gpu_idx)
+            self.grad_output = self.pool_mgr.get(self.grad_output_shape, self.dtype, False, self.device, self.gpu_idx)
+            #self.pool_mgr.ShowBucket()
+
         self.bias = None
         if self.args.bias:
             bias_shape = (self.args.out_channels,)
@@ -421,6 +496,8 @@ class ConvolutionManager:
             'total_time': 0,
             'gpu_time': 0
         }
+
+        self.pool_mgr = PoolMgr()
     
     def _setup_devices(self) -> list[torch.device]:
         if torch.cuda.is_available():
@@ -462,9 +539,11 @@ class ConvolutionManager:
             thread_id = threading.get_native_id() #threading.current_thread().ident
             if monitor:
                 monitor.start_thread_event(thread_id, time.time(), {'test_idx': test_idx, 'gpu_idx': gpu_idx})
-            runner = ConvolutionRunner(device, args, in_data_type, self.golden_database, gpu_idx, test_idx)
+            runner = ConvolutionRunner(device, args, in_data_type, self.golden_database, gpu_idx, self.pool_mgr, test_idx)
             result = runner.run()
-            runner.cleanup(True)
+            if args.pool == 0:
+                runner.cleanup(True)
+
             if monitor:
                 monitor.stop_thread_event(thread_id, time.time(), runner.execution_time)
 
@@ -482,6 +561,7 @@ class ConvolutionManager:
             
         except Exception as e:
             print(f"Error in test {test_idx} on GPU {gpu_idx}: {e}")
+            traceback.print_exc()
             with database_lock:
                 self.execution_stats['failed_tests'] += 1
             if runner:
@@ -490,15 +570,62 @@ class ConvolutionManager:
                 except:
                     pass
             return None
-    
+    # a thread : a GPU
+    def run_batch_tests_new(self, test_list: list[tuple]) -> list[Optional[ConvolutionRunner]]:
+        # 1. spawn TWO workers per GPU
+        workers = []
+        for gpu_idx, device in enumerate(self.devices):
+            for w in range(2):   # 0, 1
+                workers.append(
+                    GPUWorker(gpu_idx, w, device,
+                              self.run_single_test, self.config.timeout)
+                )
+
+        # 2. dispatch round-robin across 2*len(self.devices) slots
+        for test_idx, (args, in_data_type) in enumerate(test_list, 1):
+            slot = test_idx % len(workers)   # 0 .. 2*#GPUs-1
+            workers[slot].submit(test_idx, args, in_data_type)
+
+        # 3. wait for all queues to empty
+        for w in workers:
+            w.queue.join()
+            w.shutdown()
+
+        # 4. collect results in original order
+        results = []
+        for test_idx in range(1, len(test_list) + 1):
+            slot = test_idx % len(workers)
+            runner = workers[slot].results[test_idx]
+
+            gpu_idx = workers[slot].gpu_idx
+            w_id    = workers[slot].worker_id
+
+            if runner:
+                if not self.is_validate_pass and self.max_error == 0:
+                    print(f"Test {test_idx} pass on GPU {gpu_idx}-W{w_id}, "
+                          f"time: {runner.execution_time:.4f} ms")
+                else:
+                    print(f"Test {test_idx} pass on GPU {gpu_idx}-W{w_id}, "
+                          f"Verify {self.is_validate_pass}: "
+                          f"({self.max_error} < {self.tolerance}), "
+                          f"time: {runner.execution_time:.4f} ms")
+            else:
+                print(f"Test {test_idx} failed on GPU {gpu_idx}-W{w_id}")
+
+            results.append(runner)
+        return results
+        
     def run_batch_tests(self, test_list: list[tuple]) -> list[Optional[ConvolutionRunner]]:
         results = []
         gpu_cycle = itertools.cycle(range(len(self.devices)))
-        
+        workload = LoadWorkload()
         print(f"Running {len(test_list)} tests in batch mode")
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
             futures = []
-            for test_idx, (args, in_data_type) in enumerate(test_list, 1):
+            for idx in range(0, len(test_list)):
+                test_idx, test_time = workload[idx] if workload and idx < len(workload) else (idx + 1, 1.0)
+                args, in_data_type = test_list[test_idx - 1]
+
                 gpu_idx = next(gpu_cycle)
                 device = self.devices[gpu_idx]
                 
@@ -688,9 +815,11 @@ def Solve():
 
     # Save the collected data to a file
     # monitor.save(f'gpu_usage_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.html')
-    usage_trace = f"gpu_usage_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.json"
-    monitor.save_perfetto_trace(usage_trace)
-    if torch_trace:
+    if monitor:
+        usage_trace = f"gpu_usage_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.json"
+        monitor.save_perfetto_trace(usage_trace)
+
+    if torch_trace and monitor:
         ROCmPerfettoMonitor.merge_traces_with_relationships( torch_trace, usage_trace, f"merged_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}.json")
     # Shutdown the ROCm SMI
     if monitor:

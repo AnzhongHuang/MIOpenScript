@@ -72,7 +72,8 @@ FLAG_MAPPING = {
     '--save_db': 'save_db',
     '--sync': 'sync', # 0 is default, indicates CPU does not nned to wait for GPU idle immediately
     '--mthread': 'mthread', # run test with multiple CPU threads
-    '--usage': 'usage'  # show GPU usage
+    '--usage': 'usage',  # show GPU usage
+    '--pool': 'pool', # 1: use pool memory, 0: by default
 }
 
 CONVERTERS = {
@@ -88,7 +89,7 @@ CONVERTERS = {
     'pad_mode': str, 'fil_layout': str, 'in_layout': str, 'out_layout': str,
     'verification_cache': str, 'shapeformat': str, 'trace': str, 'event': str,
     'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int, 'gpualloc': int, 'save_db': int,
-    'test_list': str, 'sync': int, 'mthread': int, 'usage': int
+    'test_list': str, 'sync': int, 'mthread': int, 'usage': int, 'pool': int
 }
 
 class MiopenDataType(Enum):
@@ -142,6 +143,7 @@ def ParseRunList(file_path, global_args):
                 args.iter   = global_args.iter
                 args.warmup = global_args.warmup
                 args.sync   = global_args.sync
+                args.pool   = global_args.pool
                 convRunList.append((args, args.in_data_type))
 
             except Exception as e:
@@ -213,6 +215,7 @@ class MIArgs:
     sync : int = 0 # do not wait for GPU idle immediately
     mthread: int = 1
     usage: int = 0
+    pool: int = 0
 
     @staticmethod
     def InitArgs():
@@ -265,6 +268,7 @@ class MIArgs:
         args['sync'] = 0
         args['mthread'] = 1
         args['usage'] = 0
+        args['pool']=0
         return args
 
     @staticmethod
@@ -402,7 +406,8 @@ class MIArgs:
             save_db=args["save_db"],
             sync=args["sync"],
             mthread=args["mthread"],
-            usage=args["usage"]
+            usage=args["usage"],
+            pool=args["pool"]
         )
 
         return miargs
