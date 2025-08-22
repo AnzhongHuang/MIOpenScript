@@ -74,6 +74,8 @@ FLAG_MAPPING = {
     '--mthread': 'mthread', # run test with multiple CPU threads
     '--usage': 'usage',  # show GPU usage
     '--pool': 'pool', # 1: use pool memory, 0: by default
+    '--from': 'from', # run from a specified test index
+    '--to': 'to'      # run to a specified test index
 }
 
 CONVERTERS = {
@@ -89,7 +91,7 @@ CONVERTERS = {
     'pad_mode': str, 'fil_layout': str, 'in_layout': str, 'out_layout': str,
     'verification_cache': str, 'shapeformat': str, 'trace': str, 'event': str,
     'gpu': int, 'dbshape': int, 'warmup': int, 'cpu': int, 'gpualloc': int, 'save_db': int,
-    'test_list': str, 'sync': int, 'mthread': int, 'usage': int, 'pool': int
+    'test_list': str, 'sync': int, 'mthread': int, 'usage': int, 'pool': int, 'from': int, 'to': int
 }
 
 class MiopenDataType(Enum):
@@ -216,6 +218,8 @@ class MIArgs:
     mthread: int = 1
     usage: int = 0
     pool: int = 0
+    from_idx: int = -1
+    to_idx: int = -1
 
     @staticmethod
     def InitArgs():
@@ -269,6 +273,8 @@ class MIArgs:
         args['mthread'] = 1
         args['usage'] = 0
         args['pool']=0
+        args['from']=-1
+        args['to']=-1
         return args
 
     @staticmethod
@@ -407,7 +413,9 @@ class MIArgs:
             sync=args["sync"],
             mthread=args["mthread"],
             usage=args["usage"],
-            pool=args["pool"]
+            pool=args["pool"],
+            from_idx=args["from"],
+            to_idx=args["to"]
         )
 
         return miargs

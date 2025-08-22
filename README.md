@@ -1,16 +1,16 @@
 # MIOpenScript
 
 ## Run with MIOpenDriver
-    ./conv_test.sh
+    python MIOpenDriver.py --test_list conv_30.sh --verify 0 --usage 0
 
-## Run via pytorch
-    ./conv_test.sh --trace trace.json --event event.log
+## Run with pytorch trace
+    python MIOpenDriver.py --test_list conv_30.sh --verify 0 --usage 0 --trace trace.json
 
-## Run -g=1 bwd tests
-    ./conv_test.sh --g1f2 1
+## Run with GPU usage:
+    python MIOpenDriver.py --test_list conv_30.sh --verify 0 --usage 1
 
-## Parse pytorch trace
-    python perf_parse.py --trace trace.json --output trace.log
+## Use global pool memory
+    python MIOpenDriver.py --test_list conv_30.sh --verify 0 --usage 0 --pool 1
 
 ## Diff MIOpen logs
     python miopenlog_diff.py --log1 xxx --log2 xxx

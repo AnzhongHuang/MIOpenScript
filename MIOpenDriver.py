@@ -615,14 +615,17 @@ class ConvolutionManager:
             results.append(runner)
         return results
         
-    def run_batch_tests(self, test_list: list[tuple]) -> list[Optional[ConvolutionRunner]]:
+    def run_batch_tests(self, test_list: list[tuple], global_args) -> list[Optional[ConvolutionRunner]]:
         results = []
         gpu_cycle = itertools.cycle(range(len(self.devices)))
         workload = LoadWorkload()
         print(f"Running {len(test_list)} tests in batch mode")
+        from_idx = global_args.from_idx if global_args.from_idx != -1 else 1
+        to_idx   = global_args.to_idx if global_args.to_idx != -1 else len(test_list)
+        print(f"Running {to_idx - from_idx+1} tests in batch mode")
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
             futures = []
-            for idx in range(0, len(test_list)):
+            for idx in range(from_idx-1, to_idx):
                 test_idx, test_time = workload[idx] if workload and idx < len(workload) else (idx + 1, 1.0)
                 args, in_data_type = test_list[test_idx - 1]
 
@@ -717,7 +720,7 @@ def RunConvlutions(manager, global_args=None):
             
             manager.execution_stats['total_tests'] = len(conv_run_list)
             
-            runners = manager.run_batch_tests(conv_run_list)
+            runners = manager.run_batch_tests(conv_run_list, global_args)
             
         else:
             args = MIArgs.ParseParam(sys.argv[1:])
