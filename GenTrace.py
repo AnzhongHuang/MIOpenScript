@@ -11,6 +11,7 @@ import time
 import threading
 import random
 from itertools import cycle
+import os
 
 @dataclass
 class ThreadBusySpan:
@@ -99,6 +100,7 @@ class ROCmPerfettoMonitor:
         trace_data = {"traceEvents": []}
         # Add CPU thread events
         color_iter = cycle(self.color_diff)
+        pid_os = os.getpid()
 
         for thread_id, spans in self.cpu_thread_events.items():
             for span in spans:
@@ -115,7 +117,7 @@ class ROCmPerfettoMonitor:
                     "name": f"test:{test_idx}-{c_name}-GPU:{gpu_idx}",
                     "ts":  span.start * 1e6,
                     "dur": (span.stop - span.start) * 1e6,
-                    "pid": 100,             # CPU process
+                    "pid": pid_os,             # CPU process
                     "tid": thread_id,       # logical CPU thread
                     "args": {
                         "device": gpu_idx,

@@ -13,6 +13,7 @@ from enum import Enum
 import miopUtil.shapeConvert as shapeConvert
 from miopUtil.MIArgs import *
 import MIOpenDriver_Ref
+
 import miopUtil.DataHash as DataHash
 import miopUtil.PrintStat as PrintStat
 from GenTrace import ROCmPerfettoMonitor
@@ -273,18 +274,20 @@ class ConvolutionRunner:
             print(f"Invalid operation: {operation}")
     
     def run_convolution_ref(self, operation):
-        reference = MIOpenDriver_Ref.gpu_convolution_reference(
-            grad_output=self.grad_output,
-            weight=self.weight,
-            input=self.input_tensor,
-            padding=self.conv_args['padding'][0],
-            stride=self.conv_args['stride'][0],
-            dilation=self.conv_args['dilation'][0],
-            group=self.conv_args['groups'],
-            solution_id=86,
-            operation=operation,
-            type=self.data_type_str
-        )
+        reference=None
+        if hasattr(MIOpenDriver_Ref, 'gpu_convolution_reference'):
+            reference = MIOpenDriver_Ref.gpu_convolution_reference(
+                grad_output=self.grad_output,
+                weight=self.weight,
+                input=self.input_tensor,
+                padding=self.conv_args['padding'][0],
+                stride=self.conv_args['stride'][0],
+                dilation=self.conv_args['dilation'][0],
+                group=self.conv_args['groups'],
+                solution_id=86,
+                operation=operation,
+                type=self.data_type_str
+            )
         
         if reference is None:
             print("Error: Reference result is None")

@@ -413,7 +413,7 @@ class MIArgs:
             sync=args["sync"],
             mthread=args["mthread"],
             usage=args["usage"],
-            pool=args["pool"],
+            pool=args["pool"] if args["verify"]==0 else 0,
             from_idx=args["from"],
             to_idx=args["to"]
         )
